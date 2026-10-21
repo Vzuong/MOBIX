@@ -1,0 +1,21 @@
+name = "store"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+
+# Worker phục vụ luôn frontend (build từ apps/web), chỉ /api/* chạy qua Worker
+[assets]
+directory = "../web/dist"
+not_found_handling = "single-page-application"
+run_worker_first = ["/api/*"]
+
+# Tạo thật khi deploy:
+#   npx wrangler d1 create store-db      -> điền database_id
+#   npx wrangler kv namespace create CART -> điền id
+[[d1_databases]]
+binding = "DB"
+database_name = "store-db"
+database_id = "d7d6e6dd-5bfa-4e71-a6bd-dd6bb85c7255"
+
+[[kv_namespaces]]
+binding = "CART"
+id = "40add3e30708404f8e8dcde8fc0c5d28"
