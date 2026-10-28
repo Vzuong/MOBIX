@@ -1,4 +1,4 @@
-name = "store"
+name = "mobix"
 main = "src/index.ts"
 compatibility_date = "2025-01-01"
 
@@ -9,13 +9,13 @@ not_found_handling = "single-page-application"
 run_worker_first = ["/api/*"]
 
 # Tạo thật khi deploy:
-#   npx wrangler d1 create store-db      -> điền database_id
+#   npx wrangler d1 create mobix-db       -> điền database_id
 #   npx wrangler kv namespace create CART -> điền id
 [[d1_databases]]
 binding = "DB"
 database_name = "store-db"
-database_id = "d7d6e6dd-5bfa-4e71-a6bd-dd6bb85c7255"
+database_id = "ac7ad5f6-bcc3-4cbc-b5c3-ed3564a9eb29"
 
 [[kv_namespaces]]
 binding = "CART"
-id = "40add3e30708404f8e8dcde8fc0c5d28"
+id = "2a188f870d644bccb27c4d67992b13fb"

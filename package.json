@@ -1,5 +1,5 @@
 {
-  "name": "store",
+  "name": "mobix",
   "private": true,
   "workspaces": ["apps/*"],
   "scripts": {
@@ -7,7 +7,8 @@
     "db:init": "npm run db:init -w apps/api",
     "build": "npm run build -w apps/web",
     "deploy": "npm run build && npm run deploy -w apps/api",
-    "typecheck": "npm run typecheck -w apps/api && npm run typecheck -w apps/web"
+    "typecheck": "npm run typecheck -w apps/api && npm run typecheck -w apps/web",
+    "test": "npm run test -w apps/api"
   },
   "devDependencies": {
     "concurrently": "^9.0.0"
