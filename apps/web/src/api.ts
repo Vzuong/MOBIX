@@ -224,8 +224,8 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(data),
       }),
-    lookup: (params: { order_code: string; phone: string }) =>
-      req<{ ok: boolean; order?: Order; error?: string }>('/orders/lookup', {
+    lookup: (params: { order_code?: string; phone?: string; query?: string }) =>
+      req<{ ok: boolean; order?: Order; orders?: Order[]; total_found?: number; error?: string }>('/orders/lookup', {
         method: 'POST',
         body: JSON.stringify(params),
       }),

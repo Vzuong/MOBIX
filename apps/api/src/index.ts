@@ -494,47 +494,112 @@ app.post('/orders', async (c) => {
   }
 })
 
-// 2. Tra cứu đơn hàng bằng Mã đơn hàng + Số điện thoại
+// 2. Tra cứu đơn hàng bằng Mã đơn hàng HOẶC Số điện thoại (hoặc cả hai)
 app.post('/orders/lookup', async (c) => {
   try {
     await ensureOrdersTable(c.env.DB)
-    const { order_code, phone } = await c.req.json<{
+    const body = await c.req.json<{
       order_code?: string
       phone?: string
-    }>()
+      query?: string
+    }>().catch(() => ({} as any))
 
-    const cleanCode = order_code?.trim().toUpperCase()
-    const cleanPhone = phone?.replace(/[\s.-]/g, '').trim()
+    let cleanCode = (body.order_code || '').trim().toUpperCase()
+    let cleanPhone = (body.phone || '').replace(/[\s.-]/g, '').trim()
+    const query = (body.query || '').trim()
 
-    if (!cleanCode || !cleanPhone) {
+    // Hỗ trợ tìm kiếm thông minh từ 1 ô input duy nhất
+    if (query) {
+      const qDigits = query.replace(/[\s.-]/g, '')
+      if (/^\d{8,11}$/.test(qDigits)) {
+        cleanPhone = qDigits
+      } else {
+        cleanCode = query.toUpperCase()
+      }
+    }
+
+    if (!cleanCode && !cleanPhone) {
       return c.json({
         ok: false,
-        error: 'Vui lòng nhập đầy đủ Mã đơn hàng (bắt đầu bằng MBX-) và Số điện thoại đặt hàng'
+        error: 'Vui lòng nhập Mã đơn hàng hoặc Số điện thoại đặt hàng để tra cứu'
       }, 400)
     }
 
-    const row = await c.env.DB.prepare(`
-      SELECT * FROM orders
-      WHERE UPPER(order_code) = ?
-        AND (REPLACE(REPLACE(phone, ' ', ''), '.', '') = ? OR phone LIKE ?)
-      ORDER BY id DESC LIMIT 1
-    `).bind(cleanCode, cleanPhone, `%${cleanPhone.slice(-8)}%`).first<any>()
+    let rows: any[] = []
 
-    if (!row) {
+    if (cleanCode && cleanPhone) {
+      // 1. Ưu tiên tìm khớp cả mã đơn VÀ số điện thoại
+      const resBoth = await c.env.DB.prepare(`
+        SELECT * FROM orders
+        WHERE UPPER(order_code) = ?
+          AND (REPLACE(REPLACE(phone, ' ', ''), '.', '') = ? OR phone LIKE ?)
+        ORDER BY id DESC LIMIT 10
+      `).bind(cleanCode, cleanPhone, `%${cleanPhone.slice(-8)}%`).all<any>()
+
+      rows = resBoth.results || []
+
+      // Nếu không khớp cả hai, kiểm tra theo mã đơn trước
+      if (rows.length === 0) {
+        const resCode = await c.env.DB.prepare(`
+          SELECT * FROM orders WHERE UPPER(order_code) = ? OR UPPER(order_code) = ? ORDER BY id DESC LIMIT 10
+        `).bind(cleanCode, cleanCode.startsWith('MBX-') ? cleanCode : `MBX-${cleanCode}`).all<any>()
+        rows = resCode.results || []
+      }
+
+      // Nếu vẫn không có, kiểm tra theo SĐT
+      if (rows.length === 0) {
+        const resPhone = await c.env.DB.prepare(`
+          SELECT * FROM orders
+          WHERE REPLACE(REPLACE(phone, ' ', ''), '.', '') = ?
+             OR phone LIKE ?
+             OR phone = ?
+          ORDER BY id DESC LIMIT 10
+        `).bind(cleanPhone, `%${cleanPhone.slice(-8)}%`, cleanPhone).all<any>()
+        rows = resPhone.results || []
+      }
+    } else if (cleanCode) {
+      // Chỉ tra cứu theo Mã đơn hàng
+      const resCode = await c.env.DB.prepare(`
+        SELECT * FROM orders
+        WHERE UPPER(order_code) = ?
+           OR UPPER(order_code) = ?
+           OR UPPER(order_code) LIKE ?
+        ORDER BY id DESC LIMIT 10
+      `).bind(
+        cleanCode,
+        cleanCode.startsWith('MBX-') ? cleanCode : `MBX-${cleanCode}`,
+        `%${cleanCode}%`
+      ).all<any>()
+      rows = resCode.results || []
+    } else if (cleanPhone) {
+      // Chỉ tra cứu theo Số điện thoại
+      const resPhone = await c.env.DB.prepare(`
+        SELECT * FROM orders
+        WHERE REPLACE(REPLACE(phone, ' ', ''), '.', '') = ?
+           OR phone LIKE ?
+           OR phone = ?
+        ORDER BY id DESC LIMIT 10
+      `).bind(cleanPhone, `%${cleanPhone.slice(-8)}%`, cleanPhone).all<any>()
+      rows = resPhone.results || []
+    }
+
+    if (!rows || rows.length === 0) {
       return c.json({
         ok: false,
-        error: 'Không tìm thấy đơn hàng khớp với mã đơn và số điện thoại này. Vui lòng kiểm tra lại chính xác!'
+        error: cleanCode && cleanPhone
+          ? 'Không tìm thấy đơn hàng khớp với mã đơn hoặc số điện thoại này. Vui lòng kiểm tra lại!'
+          : cleanCode
+          ? `Không tìm thấy đơn hàng với mã "${cleanCode}". Vui lòng kiểm tra lại chính xác!`
+          : `Không tìm thấy đơn hàng nào gắn với số điện thoại "${cleanPhone}".`
       }, 404)
     }
 
-    let items = []
-    try {
-      items = JSON.parse(row.items_json)
-    } catch {}
-
-    return c.json({
-      ok: true,
-      order: {
+    const parseOrder = (row: any) => {
+      let items = []
+      try {
+        items = typeof row.items_json === 'string' ? JSON.parse(row.items_json) : (row.items_json || [])
+      } catch {}
+      return {
         id: row.id,
         order_code: row.order_code,
         phone: row.phone,
@@ -547,6 +612,15 @@ app.post('/orders/lookup', async (c) => {
         created_at: row.created_at,
         items
       }
+    }
+
+    const orders = rows.map(parseOrder)
+
+    return c.json({
+      ok: true,
+      order: orders[0],
+      orders: orders,
+      total_found: orders.length
     })
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err)
@@ -597,6 +671,48 @@ app.post('/chat', async (c) => {
   // Lấy toàn bộ sản phẩm thực tế từ cơ sở dữ liệu D1
   const { results: allProducts } = await c.env.DB.prepare('SELECT * FROM products ORDER BY id ASC').all<Product>()
   const intent = extractIntent(userQuery)
+
+  // 0. Xử lý tra cứu đơn hàng trực tiếp trong chat nếu người dùng hỏi
+  const orderCodeMatch = userQuery.match(/MBX-?\d{5,8}/i)
+  const phonePatternMatch = userQuery.match(/(?:(?:\+84|0)[3|5|7|8|9]\d{8})/i)
+  const isOrderQuery = /đơn hàng|tra cứu đơn|kiểm tra đơn|tình trạng đơn/i.test(userQuery)
+
+  if (orderCodeMatch || (isOrderQuery && phonePatternMatch)) {
+    try {
+      await ensureOrdersTable(c.env.DB)
+      let foundOrder: any = null
+      if (orderCodeMatch) {
+        let code = orderCodeMatch[0].toUpperCase()
+        if (!code.startsWith('MBX-') && code.startsWith('MBX')) code = 'MBX-' + code.slice(3)
+        foundOrder = await c.env.DB.prepare('SELECT * FROM orders WHERE UPPER(order_code) = ?').bind(code).first()
+      }
+      if (!foundOrder && phonePatternMatch) {
+        const ph = phonePatternMatch[0]
+        foundOrder = await c.env.DB.prepare('SELECT * FROM orders WHERE phone LIKE ? ORDER BY id DESC LIMIT 1').bind(`%${ph.slice(-8)}%`).first()
+      }
+
+      if (foundOrder) {
+        let items: any[] = []
+        try { items = JSON.parse(foundOrder.items_json) } catch {}
+        const itemsList = items.map((it: any) => `${it.name} (x${it.qty})`).join(', ') || 'Kiện hàng MOBIX'
+        const formattedTotal = new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(foundOrder.total_amount)
+        return c.json({
+          reply: `Dạ BIX đã kiểm tra đơn hàng **${foundOrder.order_code}** của khách hàng **${foundOrder.customer_name}** ạ:\n\n` +
+                 `📦 **Trạng thái:** ${foundOrder.status}\n` +
+                 `📱 **Sản phẩm:** ${itemsList}\n` +
+                 `📍 **Địa chỉ nhận:** ${foundOrder.address}, ${foundOrder.city}\n` +
+                 `💰 **Tổng thanh toán:** ${formattedTotal}\n\n` +
+                 `Bạn cũng có thể xem toàn bộ lộ trình giao hàng trực quan tại nút **📦 Tra cứu đơn** ở góc trên trang web nhé!`,
+          suggestions: [
+            'Hotline miễn phí 1800 6933',
+            'Chính sách bảo hành 1 đổi 1',
+            'Xem điện thoại hot hôm nay',
+          ],
+          products: [],
+        })
+      }
+    } catch {}
+  }
 
   // 0. Xử lý câu hỏi về danh tính AI (tên, model, phiên bản)
   if (intent.isIdentity) {

@@ -13,20 +13,17 @@ export default function OrderLookupModal({ open, onClose, onAskAI }: Props) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [order, setOrder] = useState<Order | null>(null)
+  const [ordersList, setOrdersList] = useState<Order[]>([])
   const [copied, setCopied] = useState(false)
 
   if (!open) return null
 
   const handleLookup = async (codeToUse?: string, phoneToUse?: string) => {
-    const code = (codeToUse ?? orderCode).trim()
-    const cleanPhone = (phoneToUse ?? phone).trim()
+    const code = (codeToUse !== undefined ? codeToUse : orderCode).trim()
+    const cleanPhone = (phoneToUse !== undefined ? phoneToUse : phone).trim()
 
-    if (!code) {
-      setError('Vui lòng nhập Mã đơn hàng (bắt đầu bằng MBX-)')
-      return
-    }
-    if (!cleanPhone || cleanPhone.length < 8) {
-      setError('Vui lòng nhập Số điện thoại đặt hàng')
+    if (!code && !cleanPhone) {
+      setError('Vui lòng nhập Mã đơn hàng hoặc Số điện thoại để tra cứu.')
       return
     }
 
@@ -34,15 +31,25 @@ export default function OrderLookupModal({ open, onClose, onAskAI }: Props) {
     setError('')
     try {
       const res = await api.orders.lookup({
-        order_code: code,
-        phone: cleanPhone,
+        order_code: code || undefined,
+        phone: cleanPhone || undefined,
       })
 
-      if (res.ok && res.order) {
-        setOrder(res.order)
-        setError('')
+      if (res.ok) {
+        const foundList = res.orders && res.orders.length > 0 ? res.orders : res.order ? [res.order] : []
+        if (foundList.length > 0) {
+          setOrdersList(foundList)
+          setOrder(res.order || foundList[0])
+          setError('')
+        } else {
+          setError('Không tìm thấy đơn hàng phù hợp.')
+          setOrder(null)
+          setOrdersList([])
+        }
       } else {
         setError(res.error || 'Không tìm thấy đơn hàng. Vui lòng kiểm tra lại thông tin.')
+        setOrder(null)
+        setOrdersList([])
       }
     } catch (err: unknown) {
       setError(
@@ -50,15 +57,33 @@ export default function OrderLookupModal({ open, onClose, onAskAI }: Props) {
           ? err.message
           : 'Không thể tra cứu đơn hàng vào lúc này. Vui lòng thử lại sau.'
       )
+      setOrder(null)
+      setOrdersList([])
     } finally {
       setLoading(false)
     }
   }
 
-  const handleFillSample = () => {
+  // Thử nghiệm nhanh chỉ với Mã đơn
+  const handleTestOnlyCode = () => {
     setOrderCode('MBX-888999')
+    setPhone('')
+    handleLookup('MBX-888999', '')
+  }
+
+  // Thử nghiệm nhanh chỉ với Số điện thoại
+  const handleTestOnlyPhone = () => {
+    setOrderCode('')
     setPhone('0988888888')
-    handleLookup('MBX-888999', '0988888888')
+    handleLookup('', '0988888888')
+  }
+
+  const handleClear = () => {
+    setOrderCode('')
+    setPhone('')
+    setError('')
+    setOrder(null)
+    setOrdersList([])
   }
 
   const handleCopyCode = () => {
@@ -89,7 +114,7 @@ export default function OrderLookupModal({ open, onClose, onAskAI }: Props) {
             <span className="lookup-icon">📦</span>
             <div>
               <h3 className="lookup-heading">Tra cứu tình trạng đơn hàng</h3>
-              <p className="lookup-sub">Nhập mã đơn hàng và số điện thoại để theo dõi lộ trình giao máy</p>
+              <p className="lookup-sub">Nhập <strong>Mã đơn hàng</strong> HOẶC <strong>Số điện thoại</strong> để tra cứu</p>
             </div>
           </div>
           <button className="chat-close-btn" type="button" onClick={onClose} aria-label="Đóng">
@@ -107,21 +132,25 @@ export default function OrderLookupModal({ open, onClose, onAskAI }: Props) {
         >
           <div className="lookup-input-row">
             <div className="lookup-field">
-              <label className="lookup-label">Mã đơn hàng *</label>
+              <label className="lookup-label">
+                Mã đơn hàng <span className="label-hint">(VD: MBX-888999)</span>
+              </label>
               <input
                 type="text"
                 className="lookup-input"
-                placeholder="VD: MBX-888999"
+                placeholder="Nhập mã MBX-... (nếu có)"
                 value={orderCode}
                 onChange={(e) => setOrderCode(e.target.value.toUpperCase())}
               />
             </div>
             <div className="lookup-field">
-              <label className="lookup-label">Số điện thoại đặt hàng *</label>
+              <label className="lookup-label">
+                Số điện thoại <span className="label-hint">(VD: 0988888888)</span>
+              </label>
               <input
                 type="tel"
                 className="lookup-input"
-                placeholder="VD: 0988888888"
+                placeholder="Nhập SĐT đặt hàng (nếu có)"
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
               />
@@ -130,16 +159,36 @@ export default function OrderLookupModal({ open, onClose, onAskAI }: Props) {
 
           <div className="lookup-actions-row">
             <button className="lookup-submit-btn" type="submit" disabled={loading}>
-              {loading ? 'Đang tra cứu...' : '🔍 Tra cứu đơn hàng'}
+              {loading ? 'Đang tra cứu...' : '🔍 Tra cứu đơn'}
             </button>
-            <button
-              className="lookup-sample-btn"
-              type="button"
-              onClick={handleFillSample}
-              title="Điền nhanh đơn mẫu có sẵn để thử nghiệm"
-            >
-              💡 Thử đơn mẫu
-            </button>
+            <div className="lookup-quick-tests">
+              <button
+                className="lookup-sample-btn"
+                type="button"
+                onClick={handleTestOnlyCode}
+                title="Chỉ tra cứu bằng Mã đơn hàng"
+              >
+                🏷️ Thử Mã đơn
+              </button>
+              <button
+                className="lookup-sample-btn"
+                type="button"
+                onClick={handleTestOnlyPhone}
+                title="Chỉ tra cứu bằng Số điện thoại"
+              >
+                📱 Thử SĐT
+              </button>
+              {(orderCode || phone || order) && (
+                <button
+                  className="lookup-clear-btn"
+                  type="button"
+                  onClick={handleClear}
+                  title="Xoá thông tin tra cứu"
+                >
+                  ✕ Xoá
+                </button>
+              )}
+            </div>
           </div>
         </form>
 
@@ -147,6 +196,29 @@ export default function OrderLookupModal({ open, onClose, onAskAI }: Props) {
           <div className="lookup-error-banner">
             <span>⚠️</span>
             <span>{error}</span>
+          </div>
+        )}
+
+        {/* NẾU TÌM THẤY NHIỀU ĐƠN HÀNG GẮN VỚI SĐT/MÃ */}
+        {ordersList.length > 1 && (
+          <div className="orders-found-selector">
+            <div className="selector-title">
+              🎯 Tìm thấy <strong>{ordersList.length} đơn hàng</strong>:
+            </div>
+            <div className="orders-pills-row">
+              {ordersList.map((ord) => (
+                <button
+                  key={ord.order_code}
+                  type="button"
+                  className={`order-pill-tab ${order?.order_code === ord.order_code ? 'active' : ''}`}
+                  onClick={() => setOrder(ord)}
+                >
+                  <span className="pill-code">{ord.order_code}</span>
+                  <span className="pill-status">{ord.status}</span>
+                  <span className="pill-total">{vnd(ord.total_amount)}</span>
+                </button>
+              ))}
+            </div>
           </div>
         )}
 

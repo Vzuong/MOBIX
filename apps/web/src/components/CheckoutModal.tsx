@@ -122,7 +122,7 @@ export default function CheckoutModal({ open, cart, user, onClose, onSuccess }: 
             <div className="service-alert-box">
               📞 <strong>Tổng đài viên MOBIX</strong> sẽ gọi điện đến số <strong>{phone}</strong> trong vòng 5 phút để xác nhận kiện hàng và điều phối giao siêu tốc.
               <br /><br />
-              🔍 Quý khách có thể dùng mã <strong>{orderCode}</strong> và SĐT <strong>{phone}</strong> để theo dõi tiến độ đơn hàng tại mục <strong>Tra cứu đơn</strong> ở đầu trang web.
+              🔍 Quý khách có thể dùng mã <strong>{orderCode}</strong> hoặc SĐT <strong>{phone}</strong> để theo dõi tiến độ đơn hàng tại mục <strong>Tra cứu đơn</strong> ở đầu trang web.
             </div>
 
             <button className="checkout-confirm-btn" onClick={handleFinish} type="button">

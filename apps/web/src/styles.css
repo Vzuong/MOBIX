@@ -3040,6 +3040,12 @@ a {
   color: var(--text-secondary);
 }
 
+.label-hint {
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  font-weight: normal;
+}
+
 .lookup-input {
   width: 100%;
   padding: 9px 12px;
@@ -3059,12 +3065,15 @@ a {
 .lookup-actions-row {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
   gap: 10px;
   margin-top: 4px;
 }
 
 .lookup-submit-btn {
   flex: 1;
+  min-width: 160px;
   background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
   color: #ffffff;
   border: none;
@@ -3082,22 +3091,116 @@ a {
   transform: translateY(-1px);
 }
 
+.lookup-quick-tests {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
 .lookup-sample-btn {
   background: #ffffff;
   border: 1px dashed #94a3b8;
   color: var(--text-secondary);
-  padding: 9px 12px;
+  padding: 8px 11px;
   border-radius: var(--radius-md);
-  font-size: 0.8rem;
+  font-size: 0.78rem;
   font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
+  transition: all 0.2s ease;
 }
 
 .lookup-sample-btn:hover {
   border-color: var(--primary);
   color: var(--primary);
   background: #f0fdf4;
+}
+
+.lookup-clear-btn {
+  background: #f8fafc;
+  border: 1px solid #cbd5e1;
+  color: #64748b;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.lookup-clear-btn:hover {
+  background: #fee2e2;
+  border-color: #fca5a5;
+  color: #b91c1c;
+}
+
+.orders-found-selector {
+  margin-bottom: 14px;
+  background: #f0f7ff;
+  border: 1px solid #bae6fd;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  animation: fadeIn 0.2s ease;
+}
+
+.selector-title {
+  font-size: 0.82rem;
+  color: #0369a1;
+}
+
+.orders-pills-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.order-pill-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: #ffffff;
+  border: 1.5px solid #cbd5e1;
+  border-radius: 9999px;
+  cursor: pointer;
+  font-size: 0.78rem;
+  transition: all 0.2s ease;
+}
+
+.order-pill-tab:hover {
+  border-color: var(--primary);
+}
+
+.order-pill-tab.active {
+  border-color: var(--primary);
+  background: #eff6ff;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.18);
+}
+
+.pill-code {
+  font-weight: 800;
+  color: var(--text-main);
+}
+
+.order-pill-tab.active .pill-code {
+  color: var(--primary);
+}
+
+.pill-status {
+  font-size: 0.72rem;
+  padding: 2px 6px;
+  background: #f1f5f9;
+  border-radius: 4px;
+  color: #475569;
+}
+
+.pill-total {
+  font-weight: 700;
+  color: var(--text-secondary);
 }
 
 .lookup-error-banner {
