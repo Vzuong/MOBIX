@@ -13,9 +13,19 @@ export type Product = {
   screen: string
   ram_rom: string
   battery: string
+  camera: string
+  stock: number
   rating: number
   tag: string
   description: string
+}
+
+export type Policy = {
+  id: number
+  title: string
+  slug: string
+  category: string
+  content: string
 }
 
 export type User = {
@@ -26,10 +36,94 @@ export type User = {
   created_at: string
 }
 
-type Env = { Bindings: { DB: D1Database; CART: KVNamespace } }
+type Env = {
+  Bindings: {
+    DB: D1Database
+    CART: KVNamespace
+    AI: Ai
+    VECTORIZE: VectorizeIndex
+  }
+}
+
 type Line = { productId: number; qty: number }
 
 const app = new Hono<Env>().basePath('/api')
+
+// Hàm định dạng tiền VNĐ cho văn bản AI
+function formatVndPrice(price: number): string {
+  if (price >= 1_000_000) {
+    const m = price / 1_000_000
+    return `${m % 1 === 0 ? m.toFixed(0) : m.toFixed(1)} triệu`
+  }
+  return `${(price / 1_000).toFixed(0)}k`
+}
+
+// Đồng bộ toàn bộ sản phẩm và chính sách vào Cloudflare Vectorize bằng model BGE-M3
+async function syncVectorStore(env: Env['Bindings']) {
+  const { results: products } = await env.DB.prepare('SELECT * FROM products ORDER BY id ASC').all<Product>()
+  const { results: policies } = await env.DB.prepare('SELECT * FROM policies ORDER BY id ASC').all<Policy>()
+
+  const items: { id: string; text: string; metadata: Record<string, string | number> }[] = []
+
+  for (const p of products) {
+    const text = `Sản phẩm ${p.name} thương hiệu ${p.brand}, giá bán ${p.price} VNĐ (${formatVndPrice(p.price)}). ` +
+      `Trang bị chip ${p.chip}, màn hình ${p.screen}, RAM và bộ nhớ trong ${p.ram_rom}, dung lượng pin ${p.battery}. ` +
+      `Hệ thống camera: ${p.camera || 'Chất lượng cao'}. Tình trạng kho: ${p.stock} máy sẵn có. ` +
+      `Đặc điểm: ${p.description}. Nhãn: ${p.tag}. Đánh giá: ${p.rating} sao.`
+    items.push({
+      id: `prod_${p.id}`,
+      text,
+      metadata: { type: 'product', productId: p.id, name: p.name, brand: p.brand, price: p.price },
+    })
+  }
+
+  for (const pol of policies) {
+    const text = `Chính sách ${pol.title} (${pol.category}): ${pol.content}`
+    items.push({
+      id: `policy_${pol.id}`,
+      text,
+      metadata: { type: 'policy', policyId: pol.id, title: pol.title, category: pol.category },
+    })
+  }
+
+  if (items.length === 0) {
+    return { ok: true, synced: 0 }
+  }
+
+  const BATCH_SIZE = 10
+  const vectors: VectorizeVector[] = []
+
+  for (let i = 0; i < items.length; i += BATCH_SIZE) {
+    const chunk = items.slice(i, i + BATCH_SIZE)
+    const texts = chunk.map((c) => c.text)
+
+    const embedRes = (await env.AI.run('@cf/baai/bge-m3', { text: texts })) as { data?: number[][] }
+    const embeddings = embedRes.data || []
+
+    for (let j = 0; j < chunk.length; j++) {
+      if (embeddings[j] && embeddings[j].length > 0) {
+        vectors.push({
+          id: chunk[j].id,
+          values: embeddings[j],
+          metadata: chunk[j].metadata,
+        })
+      }
+    }
+  }
+
+  if (vectors.length > 0) {
+    await env.VECTORIZE.upsert(vectors)
+  }
+
+  return {
+    ok: true,
+    message: 'Đã đồng bộ toàn bộ dữ liệu vào Cloudflare Vectorize thành công!',
+    total_synced: vectors.length,
+    products_count: products.length,
+    policies_count: policies.length,
+    embedding_model: '@cf/baai/bge-m3',
+  }
+}
 
 const CART_TTL = 60 * 60 * 24 * 30 // 30 ngày
 
@@ -78,8 +172,8 @@ app.get('/products', async (c) => {
     params.push(brand)
   }
   if (q) {
-    conditions.push('(LOWER(name) LIKE ? OR LOWER(chip) LIKE ? OR LOWER(description) LIKE ? OR LOWER(tag) LIKE ?)')
-    params.push(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`)
+    conditions.push('(LOWER(name) LIKE ? OR LOWER(chip) LIKE ? OR LOWER(description) LIKE ? OR LOWER(tag) LIKE ? OR LOWER(camera) LIKE ?)')
+    params.push(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`)
   }
 
   if (conditions.length > 0) {
@@ -90,6 +184,13 @@ app.get('/products', async (c) => {
   const stmt = c.env.DB.prepare(sql)
   const { results } = params.length > 0 ? await stmt.bind(...params).all<Product>() : await stmt.all<Product>()
   c.header('Cache-Control', 'public, max-age=60, s-maxage=300, stale-while-revalidate=600')
+  return c.json(results)
+})
+
+// Lấy danh sách chính sách bán hàng & hỗ trợ khách hàng
+app.get('/policies', async (c) => {
+  const { results } = await c.env.DB.prepare('SELECT * FROM policies ORDER BY id ASC').all<Policy>()
+  c.header('Cache-Control', 'public, max-age=300, s-maxage=600')
   return c.json(results)
 })
 
@@ -280,9 +381,203 @@ app.get('/auth/me', async (c) => {
   return c.json({ user })
 })
 
-// Chatbot thông minh tư vấn chọn điện thoại (BIX AI Advisor)
+// ============================================================================
+// ĐƠN HÀNG & TRA CỨU ĐƠN HÀNG (ORDERS & ORDER TRACKING)
+// ============================================================================
+
+async function ensureOrdersTable(db: D1Database) {
+  await db.prepare(`
+    CREATE TABLE IF NOT EXISTS orders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      order_code TEXT UNIQUE NOT NULL,
+      phone TEXT NOT NULL,
+      customer_name TEXT NOT NULL,
+      address TEXT NOT NULL,
+      city TEXT NOT NULL,
+      payment_method TEXT NOT NULL,
+      total_amount INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'Đang xử lý',
+      items_json TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `).run()
+
+  // Kiểm tra có đơn mẫu chưa, nếu chưa thêm 1 đơn mẫu để người dùng thử nghiệm
+  const sample = await db.prepare('SELECT 1 FROM orders WHERE order_code = ?').bind('MBX-888999').first()
+  if (!sample) {
+    const sampleItems = [
+      {
+        id: 1,
+        name: 'iPhone 18 Pro Max 256GB',
+        price: 41990000,
+        qty: 1,
+        image: 'https://eplehuset.no/cdn/shop/files/iPhone_18_Pro_Max_Burgundy_PDP_Image_Position_1__no-NO_47b90b79-4d9e-4cee-91c9-78e8381445e8.png?v=1788993474&width=2200'
+      }
+    ]
+    await db.prepare(`
+      INSERT INTO orders (order_code, phone, customer_name, address, city, payment_method, total_amount, status, items_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      'MBX-888999',
+      '0988888888',
+      'Hoàng Vương',
+      'Tòa nhà Landmark 72, Phạm Hùng',
+      'Hà Nội',
+      'Chuyển khoản VietQR',
+      41990000,
+      'Đang giao hàng',
+      JSON.stringify(sampleItems)
+    ).run()
+  }
+}
+
+// 1. Tạo đơn hàng mới sau khi đặt hàng
+app.post('/orders', async (c) => {
+  try {
+    await ensureOrdersTable(c.env.DB)
+    const body = await c.req.json<{
+      order_code?: string
+      phone?: string
+      customer_name?: string
+      address?: string
+      city?: string
+      payment_method?: string
+      total_amount?: number
+      items?: any[]
+    }>()
+
+    const order_code = body.order_code?.trim() || `MBX-${Math.floor(100000 + Math.random() * 900000)}`
+    const phone = body.phone?.replace(/[\s.-]/g, '').trim() || ''
+    const customer_name = body.customer_name?.trim() || 'Khách hàng'
+    const address = body.address?.trim() || ''
+    const city = body.city?.trim() || 'Toàn quốc'
+    const payment_method = body.payment_method?.trim() || 'Thanh toán khi nhận hàng (COD)'
+    const total_amount = body.total_amount || 0
+    const items = Array.isArray(body.items) ? body.items : []
+
+    if (!phone) {
+      return c.json({ ok: false, error: 'Vui lòng cung cấp số điện thoại nhận hàng' }, 400)
+    }
+
+    await c.env.DB.prepare(`
+      INSERT INTO orders (order_code, phone, customer_name, address, city, payment_method, total_amount, status, items_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'Đang xử lý', ?)
+    `).bind(
+      order_code,
+      phone,
+      customer_name,
+      address,
+      city,
+      payment_method,
+      total_amount,
+      JSON.stringify(items)
+    ).run()
+
+    return c.json({
+      ok: true,
+      order_code,
+      order: {
+        order_code,
+        phone,
+        customer_name,
+        address,
+        city,
+        payment_method,
+        total_amount,
+        status: 'Đang xử lý',
+        items
+      }
+    })
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err)
+    return c.json({ ok: false, error: `Lỗi lưu đơn hàng: ${msg}` }, 500)
+  }
+})
+
+// 2. Tra cứu đơn hàng bằng Mã đơn hàng + Số điện thoại
+app.post('/orders/lookup', async (c) => {
+  try {
+    await ensureOrdersTable(c.env.DB)
+    const { order_code, phone } = await c.req.json<{
+      order_code?: string
+      phone?: string
+    }>()
+
+    const cleanCode = order_code?.trim().toUpperCase()
+    const cleanPhone = phone?.replace(/[\s.-]/g, '').trim()
+
+    if (!cleanCode || !cleanPhone) {
+      return c.json({
+        ok: false,
+        error: 'Vui lòng nhập đầy đủ Mã đơn hàng (bắt đầu bằng MBX-) và Số điện thoại đặt hàng'
+      }, 400)
+    }
+
+    const row = await c.env.DB.prepare(`
+      SELECT * FROM orders
+      WHERE UPPER(order_code) = ?
+        AND (REPLACE(REPLACE(phone, ' ', ''), '.', '') = ? OR phone LIKE ?)
+      ORDER BY id DESC LIMIT 1
+    `).bind(cleanCode, cleanPhone, `%${cleanPhone.slice(-8)}%`).first<any>()
+
+    if (!row) {
+      return c.json({
+        ok: false,
+        error: 'Không tìm thấy đơn hàng khớp với mã đơn và số điện thoại này. Vui lòng kiểm tra lại chính xác!'
+      }, 404)
+    }
+
+    let items = []
+    try {
+      items = JSON.parse(row.items_json)
+    } catch {}
+
+    return c.json({
+      ok: true,
+      order: {
+        id: row.id,
+        order_code: row.order_code,
+        phone: row.phone,
+        customer_name: row.customer_name,
+        address: row.address,
+        city: row.city,
+        payment_method: row.payment_method,
+        total_amount: row.total_amount,
+        status: row.status,
+        created_at: row.created_at,
+        items
+      }
+    })
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err)
+    return c.json({ ok: false, error: `Lỗi tra cứu: ${msg}` }, 500)
+  }
+})
+
+// API đồng bộ dữ liệu vào Vectorize (có thể gọi từ curl hoặc background)
+app.post('/sync-vectors', async (c) => {
+  try {
+    const res = await syncVectorStore(c.env)
+    return c.json(res)
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err)
+    return c.json({ ok: false, error: msg }, 500)
+  }
+})
+
+app.get('/sync-vectors', async (c) => {
+  try {
+    const res = await syncVectorStore(c.env)
+    return c.json(res)
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err)
+    return c.json({ ok: false, error: msg }, 500)
+  }
+})
+
+// Chatbot thông minh tư vấn chọn điện thoại (BIX AI Advisor - Vectorize RAG & Llama 3.3)
 app.post('/chat', async (c) => {
-  const { message } = await c.req.json<{ message?: string }>()
+  const { message } = await c.req.json<{ message?: string }>().catch(() => ({ message: '' }))
   if (!message || typeof message !== 'string' || message.trim() === '') {
     return c.json({
       reply: 'Chào bạn! Mình là BIX 🤖 - Trợ lý công nghệ AI của MOBIX. Bạn đang tìm mua mẫu điện thoại nào hoặc cần tư vấn tầm giá bao nhiêu ạ?',
@@ -291,24 +586,328 @@ app.post('/chat', async (c) => {
         'iPhone với Xiaomi máy nào quay phim tốt hơn?',
         'Máy chơi game tốt nhất trong tầm giá?',
         'Máy gập nào đáng mua?',
+        'Chính sách trả góp 0%',
       ],
       products: [],
     })
   }
 
+  const userQuery = message.trim()
+
   // Lấy toàn bộ sản phẩm thực tế từ cơ sở dữ liệu D1
   const { results: allProducts } = await c.env.DB.prepare('SELECT * FROM products ORDER BY id ASC').all<Product>()
+  const intent = extractIntent(userQuery)
 
-  // 1. Phân tích ý định & ngân sách
-  const intent = extractIntent(message)
+  // 0. Xử lý câu hỏi về danh tính AI (tên, model, phiên bản)
+  if (intent.isIdentity) {
+    return c.json({
+      reply: 'Mình là **BIX** 🤖 - Trợ lý trí tuệ nhân tạo chuyên sâu của hệ thống bán lẻ smartphone MOBIX. Mình được vận hành bởi mô hình ngôn ngữ lớn **Meta Llama 3.3** kết hợp mô hình tìm kiếm ngữ nghĩa vector **BGE-M3** trên nền tảng Cloudflare Workers AI. Mình luôn sẵn sàng tư vấn cấu hình, camera, hiệu năng chiến game hoặc các chính sách bảo hành, trả góp 0% tại MOBIX ạ!',
+      suggestions: [
+        'Con máy chụp ảnh ngon nhất?',
+        'Máy nào chơi game đỉnh nhất?',
+        'Chính sách trả góp 0%',
+        'Chính sách bảo hành 1 đổi 1',
+      ],
+      products: [],
+    })
+  }
 
-  // 2. Chấm điểm & xếp hạng mức độ phù hợp của từng sản phẩm
-  const ranked = scoreAndRankProducts(allProducts, intent)
+  // 0. Xử lý câu hỏi ngoài phạm vi (bên thứ ba, toán học, chuyện phiếm)
+  if (intent.isOutOfScope) {
+    return c.json({
+      reply: 'Dạ, câu hỏi này nằm ngoài phạm vi tư vấn của hệ thống MOBIX ạ. BIX là trợ lý chuyên tư vấn các dòng smartphone và chính sách mua sắm, trả góp 0% tại MOBIX thôi ạ. Nếu bạn cần hỗ trợ tìm kiếm điện thoại hoặc kiểm tra ưu đãi tại cửa hàng, mình luôn sẵn sàng nhé!',
+      suggestions: [
+        'Con máy chụp ảnh ngon nhất?',
+        'Máy nào chơi game đỉnh nhất?',
+        'Chính sách trả góp 0%',
+        'Chính sách bảo hành 1 đổi 1',
+      ],
+      products: [],
+    })
+  }
 
-  // 3. Tạo lời khuyên tư vấn thực tế kèm ưu - nhược điểm và danh sách sản phẩm khớp 100%
-  const response = generateAdvice(intent, ranked, allProducts)
+  try {
+    // 1. Tạo vector cho câu hỏi bằng model @cf/baai/bge-m3
+    const queryEmbed = (await c.env.AI.run('@cf/baai/bge-m3', { text: [userQuery] })) as { data?: number[][] }
+    const queryVector = queryEmbed.data?.[0]
 
-  return c.json(response)
+    let matchedProducts: Product[] = []
+    let matchedPolicies: Policy[] = []
+    let vectorProdIds: number[] = []
+
+    if (queryVector && queryVector.length > 0) {
+      // 2. Tìm kiếm sản phẩm & chính sách tương đồng trong Vectorize
+      let searchRes = await c.env.VECTORIZE.query(queryVector, {
+        topK: 5,
+        returnMetadata: 'all',
+      })
+
+      // Cơ chế Auto-Init (nếu Vectorize đang trống thì tự động nạp ngầm dữ liệu trong 2s)
+      if (!searchRes.matches || searchRes.matches.length === 0) {
+        await syncVectorStore(c.env)
+        searchRes = await c.env.VECTORIZE.query(queryVector, {
+          topK: 5,
+          returnMetadata: 'all',
+        })
+      }
+
+      const prodIds = searchRes.matches
+        .filter((m) => m.id.startsWith('prod_'))
+        .map((m) => Number(m.id.replace('prod_', '')))
+        .filter((id) => !isNaN(id))
+
+      vectorProdIds = prodIds
+
+      const policyIds = searchRes.matches
+        .filter((m) => m.id.startsWith('policy_'))
+        .map((m) => Number(m.id.replace('policy_', '')))
+        .filter((id) => !isNaN(id))
+
+      if (policyIds.length > 0) {
+        const marks = policyIds.map(() => '?').join(',')
+        const { results: foundPolicies } = await c.env.DB.prepare(`SELECT * FROM policies WHERE id IN (${marks})`)
+          .bind(...policyIds)
+          .all<Policy>()
+        matchedPolicies = foundPolicies
+      }
+    }
+
+    // Lựa chọn sản phẩm chuẩn xác nhất theo ý định của khách hàng
+    if (intent.isOutOfScope) {
+      // Câu hỏi ngoài phạm vi hoặc bên thứ ba: Không đưa sản phẩm thừa
+      matchedProducts = []
+      matchedPolicies = []
+    } else if (!intent.isPolicy) {
+      const ranked = scoreAndRankProducts(allProducts, intent)
+
+      // Nếu khách có nhu cầu rõ ràng (chụp ảnh, chơi game, pin trâu, máy gập, ngân sách cụ thể, máy tốt nhất...):
+      // Sử dụng bảng xếp hạng phần cứng chuyên sâu để chọn ngay các máy dẫn đầu phân khúc
+      const hasSpecificIntent =
+        intent.wantsPhoto ||
+        intent.wantsVideo ||
+        intent.wantsGaming ||
+        intent.wantsBattery ||
+        intent.wantsFoldable ||
+        intent.maxBudget !== undefined ||
+        intent.isGeneralBest ||
+        intent.isSuperlative ||
+        intent.brandPreference !== undefined ||
+        intent.specificModel !== undefined
+
+      if (hasSpecificIntent) {
+        matchedProducts = ranked.slice(0, 3).map((r) => r.product)
+      } else if (vectorProdIds.length > 0) {
+        // Nếu câu hỏi tự do không theo khuôn mẫu nhưng Vectorize tìm thấy máy liên quan
+        const prodMap = new Map(allProducts.map((p) => [p.id, p]))
+        matchedProducts = vectorProdIds
+          .flatMap((id: number) => {
+            const p = prodMap.get(id)
+            return p ? [p] : []
+          })
+          .slice(0, 3)
+      } else {
+        matchedProducts = ranked.slice(0, 3).map((r) => r.product)
+      }
+    } else {
+      // Nếu hỏi thuần về chính sách (trả góp, bảo hành...) thì không hiện sản phẩm thừa
+      matchedProducts = []
+
+      // Tìm chính sách cụ thể từ D1 nếu Vectorize chưa lấy trúng
+      let polCategory = ''
+      const qLow = userQuery.toLowerCase()
+      if (qLow.includes('trả góp')) polCategory = 'installment'
+      else if (qLow.includes('bảo hành') || qLow.includes('1 đổi 1')) polCategory = 'warranty'
+      else if (qLow.includes('giao hàng') || qLow.includes('ship')) polCategory = 'shipping'
+      else if (qLow.includes('đổi trả')) polCategory = 'returns'
+      else if (qLow.includes('thu cũ') || qLow.includes('lên đời')) polCategory = 'trade-in'
+      else if (qLow.includes('thanh toán') || qLow.includes('cod')) polCategory = 'payment'
+
+      if (polCategory) {
+        const { results: specificPolicies } = await c.env.DB.prepare('SELECT * FROM policies WHERE category = ?')
+          .bind(polCategory)
+          .all<Policy>()
+        matchedPolicies = specificPolicies
+      } else if (matchedPolicies.length === 0) {
+        const { results: allPols } = await c.env.DB.prepare('SELECT * FROM policies').all<Policy>()
+        matchedPolicies = allPols
+      }
+    }
+
+    // Giới hạn tối đa 3 sản phẩm đắt giá nhất
+    matchedProducts = matchedProducts.slice(0, 3)
+
+    // 3. Xây dựng ngữ cảnh RAG cho Model Meta Llama 3.3
+    let contextText = ''
+    if (intent.isOutOfScope) {
+      contextText +=
+        '=== PHẠM VI TƯ VẤN ===\n' +
+        '- Khách hàng đang hỏi về nền tảng/dịch vụ của bên thứ ba (Shopee, Lazada...) hoặc chủ đề ngoài phạm vi bán smartphone tại MOBIX.\n' +
+        '- QUY TẮC BẮT BUỘC: TUYỆT ĐỐI KHÔNG tư vấn sản phẩm smartphone, KHÔNG gượng ép liên hệ sang sản phẩm của shop.\n' +
+        '- Hãy thẳng thắn, lịch sự từ chối: Nêu rõ BIX là trợ lý của hệ thống MOBIX nên không thể giải đáp chính xác về dịch vụ của bên thứ ba này, và sẵn sàng hỗ trợ nếu khách cần tư vấn điện thoại hoặc chính sách tại MOBIX.\n'
+    } else {
+      if (matchedProducts.length > 0) {
+        contextText += '=== SẢN PHẨM PHÙ HỢP TỪ KHO HÀNG MOBIX ===\n'
+        for (const p of matchedProducts) {
+          contextText +=
+            `- Tên máy: ${p.name} (Hãng: ${p.brand})\n` +
+            `  + Giá bán: ${formatVndPrice(p.price)}\n` +
+            `  + Chip & Màn hình: ${p.chip}, ${p.screen}\n` +
+            `  + Camera: ${p.camera}\n` +
+            `  + Pin & Sạc: ${p.battery}\n` +
+            `  + Tồn kho: ${p.stock > 0 ? `${p.stock} máy` : 'Hết hàng'}\n` +
+            `  + Đặc điểm: ${p.description}\n\n`
+        }
+      }
+
+      if (matchedPolicies.length > 0) {
+        contextText += '=== CHÍNH SÁCH BÁN HÀNG & BẢO HÀNH CỦA MOBIX ===\n'
+        for (const pol of matchedPolicies) {
+          contextText += `- ${pol.title}: ${pol.content}\n`
+        }
+      }
+    }
+
+    const systemPrompt = `Bạn là BIX 🤖 - Chuyên viên tư vấn bán smartphone cao cấp và tận tâm tại hệ thống MOBIX (https://mobix.vn).
+
+PHONG CÁCH TƯ VẤN (BẮT BUỘC):
+- Bạn là người tư vấn bán hàng chuyên nghiệp, ấm áp, lễ phép, nhiệt tình và am hiểu công nghệ như nhân viên xuất sắc tại cửa hàng flagship (TopZone/CellphoneS/Thế Giới Di Động).
+- Luôn xưng hô: "Dạ em chào anh/chị ạ!" hoặc "Dạ chào bạn!", xưng "em" hoặc "mình", gọi khách là "anh/chị" hoặc "bạn". Tuyệt đối không xưng "tôi", không dùng đại từ xa lạ hay giọng điệu máy móc robot.
+- Trả lời tự nhiên, có tâm, đứng về phía quyền lợi và trải nghiệm của khách hàng để khuyên chiếc máy đáng tiền nhất.
+
+QUY TẮC CỐT LÕI:
+1. CẤM TUYỆT ĐỐI CÁC CÂU MỞ ĐẦU RẬP KHUÔN / ROBOT:
+   - CẤM CÁC CÂU: "Bạn đang tìm kiếm một chiếc điện thoại...", "Dựa trên dữ liệu sản phẩm từ MOBIX...", "Dựa trên phân tích kho dữ liệu...", "Hệ thống chúng tôi ghi nhận...".
+   - Mở đầu thẳng thắn, ấm áp, ví dụ:
+     + "Dạ em chào anh/chị! Nếu để chọn chiếc máy chụp ảnh đỉnh nhất tại MOBIX hiện tại, em tư vấn thật lòng 2 siêu phẩm camera đáng tiền nhất này ạ:"
+     + "Dạ chào bạn! Để cày game mượt mà màn 144Hz - 165Hz không lo giật lag, bên mình có 2 cỗ máy chiến game hàng đầu này:"
+     + "Dạ chào bạn! Trong tầm giá dưới 20 triệu, 2 dòng máy có hiệu năng và độ bền tốt nhất bên mình là:"
+
+2. DIỄN ĐẠT BẰNG LỢI ÍCH TRẢI NGHIỆM THỰC TẾ, CẤM SAO CHÉP MÃ CẢM BIẾN / THÔNG SỐ KHÔ KHAN:
+   - CẤM các chuỗi thông số khô khan như: "Sony IMX989, LYT-900, khẩu độ f/1.6, tele trôi nổi APO, 50MP OIS, f/2.4...".
+   - Dịch thành trải nghiệm đời thường dễ cảm nhận:
+     + "vivo X300 Ultra 5G (35.9 triệu): Cụm camera ZEISS chụp chân dung màu da hồng hào tự nhiên, đặc biệt chụp đêm và zoom xa đi xem concert siêu nét."
+     + "Xiaomi 17 Ultra 5G (30.5 triệu): Hệ thống ống kính Leica huyền thoại và cảm biến lớn 1 inch cho nước ảnh có chiều sâu điện ảnh, bắt sáng cực tốt khi thiếu sáng."
+     + "iPhone 18 Pro Max (41.9 triệu): Vua về quay video ổn định và hệ màu sắc chân thực, tải lên Story/TikTok luôn giữ độ nét cao nhất."
+
+3. LUÔN GHI GIÁ BÁN KÈM THEO:
+   - Kèm giá tiền triệu đồng cụ thể bên cạnh tên máy, ví dụ: "1. vivo X300 Ultra 5G (35.9 triệu)".
+
+4. KHI HỎI VỀ CHÍNH SÁCH BÁN HÀNG (TRẢ GÓP, BẢO HÀNH, VẬN CHUYỂN, ĐỔI TRẢ):
+   - Trả lời nhiệt tình, rõ ràng, nêu bật quyền lợi của khách: "Dạ bên em hỗ trợ trả góp 0% cực kỳ linh hoạt qua thẻ tín dụng hoặc CCCD, duyệt nhanh chỉ 5-10 phút là nhận máy ngay ạ!", "Bảo hành 1 đổi 1 trong 30 ngày nếu có lỗi phần cứng từ nhà sản xuất ạ."
+   - Không lan man sang giới thiệu máy nếu khách không hỏi.
+
+5. KHI KHÁCH HỎI NGOÀI PHẠM VI (Shopee ví trả sau, sàn khác, toán học, câu hỏi ngoài lề...):
+   - Lịch sự, lễ phép từ chối: "Dạ thưa anh/chị, em là tư vấn viên tại MOBIX nên không có thông tin chi tiết về dịch vụ của bên thứ ba này ạ. Nếu anh/chị cần tư vấn các dòng smartphone hay ưu đãi của shop thì em luôn sẵn sàng hỗ trợ mình nhé ạ!"
+   - Tuyệt đối không tư vấn điện thoại khi khách hỏi ngoài lề.
+
+6. CÂU HỎI KẾT THÚC CHU ĐÁO:
+   - Luôn kết thúc bằng một câu gợi mở thân thiện, ví dụ: "Anh/chị thường thích chụp ảnh chân dung người thân hay phong cảnh du lịch hơn để em tư vấn màu sắc và quà tặng kèm theo cho mình nhé ạ!"`
+
+    const userPrompt = `[DỮ LIỆU SẢN PHẨM & CHÍNH SÁCH THỰC TẾ]:\n${
+      contextText || 'Kho hàng MOBIX đầy đủ các mẫu smartphone flagship và tầm trung.'
+    }\n\n[CÂU HỎI CỦA KHÁCH HÀNG]:\n${userQuery}\n\n[YÊU CẦU]: Hãy trả lời như một người tư vấn bán hàng chuyên nghiệp, ấm áp, tự nhiên, không đọc chép thông số kỹ thuật khô khan.`
+
+    // 4. Gọi Model LLM (ưu tiên Llama 3.3 70B Fast, fallback Llama 3.2 3B)
+    let aiReply = ''
+    try {
+      const aiChatRes = (await c.env.AI.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast' as any, {
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        max_tokens: 800,
+        temperature: 0.3,
+      })) as { response?: string }
+      aiReply = aiChatRes.response || ''
+    } catch {
+      const fallbackChatRes = (await c.env.AI.run('@cf/meta/llama-3.2-3b-instruct' as any, {
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        max_tokens: 800,
+        temperature: 0.3,
+      })) as { response?: string }
+      aiReply = fallbackChatRes.response || ''
+    }
+
+    const reply =
+      aiReply ||
+      'Chào bạn! Mình có thể hỗ trợ tư vấn chi tiết về cấu hình, camera hoặc chính sách trả góp của các dòng máy tại MOBIX ạ.'
+
+    // Lọc ra danh sách các máy THỰC SỰ được AI đề cập và tư vấn trong câu trả lời
+    let finalProducts: Product[] = []
+    if (!intent.isPolicy) {
+      const replyLower = reply.toLowerCase()
+      const mentioned: { product: Product; index: number }[] = []
+
+      // Tìm trong danh sách sản phẩm ứng viên
+      for (const p of matchedProducts) {
+        const fullName = p.name.toLowerCase()
+        let pos = replyLower.indexOf(fullName)
+
+        if (pos === -1) {
+          // Bỏ bớt thông số phụ: 5G, ram/rom...
+          const cleanName = fullName
+            .replace(/\b(5g|16gb\/512gb|12gb\/256gb|8gb\/128gb|256gb|128gb|512gb)\b/gi, '')
+            .replace(/\s+/g, ' ')
+            .trim()
+          pos = replyLower.indexOf(cleanName)
+        }
+
+        if (pos === -1) {
+          // Từ khoá model chính (ví dụ: "rog phone 8", "gt8 pro", "17 ultra", "x300 ultra", "s26 ultra")
+          const brand = p.brand.toLowerCase()
+          const modelPart = fullName
+            .replace(brand, '')
+            .replace(/\b(5g|16gb\/512gb|12gb\/256gb|8gb\/128gb|256gb|128gb|512gb)\b/gi, '')
+            .trim()
+          const keyTokens = modelPart.split(/\s+/).slice(0, 2).join(' ')
+          if (keyTokens.length >= 3 && replyLower.includes(keyTokens)) {
+            pos = replyLower.indexOf(keyTokens)
+          }
+        }
+
+        if (pos !== -1) {
+          mentioned.push({ product: p, index: pos })
+        }
+      }
+
+      // Sắp xếp đúng theo thứ tự AI đã nhắc tới trong bài viết
+      mentioned.sort((a, b) => a.index - b.index)
+
+      // Nếu tìm thấy máy được AI nhắc, CHỈ giữ đúng các máy đó!
+      if (mentioned.length > 0) {
+        finalProducts = mentioned.map((m) => m.product)
+      } else {
+        // Nếu AI không nhắc đến sản phẩm nào (từ chối, câu hỏi ngoài lề, kiến thức chung) -> KHÔNG HIỆN THẺ SẢN PHẨM NÀO!
+        finalProducts = []
+      }
+    }
+
+    const suggestions: string[] = []
+    if (finalProducts.length > 0) {
+      suggestions.push(`${finalProducts[0].name} có hàng không?`)
+      if (finalProducts.length > 1) {
+        suggestions.push(`So sánh ${finalProducts[0].name} với ${finalProducts[1].name}`)
+      }
+    } else {
+      suggestions.push('Con máy chụp ảnh ngon nhất?', 'Máy nào chơi game đỉnh nhất?')
+    }
+    suggestions.push('Chính sách trả góp 0%', 'Chính sách bảo hành 1 đổi 1')
+
+    return c.json({
+      reply,
+      suggestions: suggestions.slice(0, 4),
+      products: finalProducts,
+    })
+  } catch (aiError) {
+    console.error('Lỗi khi gọi Workers AI (chuyển sang fallback an toàn):', aiError)
+    // Fallback an toàn đảm bảo hệ thống không bao giờ gặp lỗi 500
+    const ranked = scoreAndRankProducts(allProducts, intent)
+    const fallbackResponse = generateAdvice(intent, ranked, allProducts)
+    return c.json(fallbackResponse)
+  }
 })
 
 export default app

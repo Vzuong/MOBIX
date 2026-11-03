@@ -9,9 +9,19 @@ export type Product = {
   screen: string
   ram_rom: string
   battery: string
+  camera?: string
+  stock?: number
   rating: number
   tag: string
   description: string
+}
+
+export type Policy = {
+  id: number
+  title: string
+  slug: string
+  category: string
+  content: string
 }
 
 export type CartItem = {
@@ -30,6 +40,28 @@ export type User = {
   username: string
   phone: string
   role?: string
+}
+
+export type OrderItem = {
+  id: number
+  name: string
+  price: number
+  qty: number
+  image?: string
+}
+
+export type Order = {
+  id?: number
+  order_code: string
+  phone: string
+  customer_name: string
+  address: string
+  city: string
+  payment_method: string
+  total_amount: number
+  status: string
+  created_at?: string
+  items: OrderItem[]
 }
 
 export type ChatMessage = {
@@ -124,6 +156,7 @@ export const api = {
     } catch {}
     return data
   },
+  policies: () => req<Policy[]>('/policies'),
   cart: () => req<Cart>('/cart'),
   add: (productId: number) =>
     req<Cart>('/cart/items', { method: 'POST', body: JSON.stringify({ productId }) }),
@@ -175,6 +208,27 @@ export const api = {
         return null
       }
     },
+  },
+  orders: {
+    create: (data: {
+      order_code: string
+      phone: string
+      customer_name: string
+      address: string
+      city: string
+      payment_method: string
+      total_amount: number
+      items: OrderItem[]
+    }) =>
+      req<{ ok: boolean; order_code: string; order: Order }>('/orders', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    lookup: (params: { order_code: string; phone: string }) =>
+      req<{ ok: boolean; order?: Order; error?: string }>('/orders/lookup', {
+        method: 'POST',
+        body: JSON.stringify(params),
+      }),
   },
 }
 

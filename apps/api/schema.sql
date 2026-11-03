@@ -10,6 +10,8 @@ CREATE TABLE products (
   screen TEXT NOT NULL,
   ram_rom TEXT NOT NULL,
   battery TEXT NOT NULL,
+  camera TEXT NOT NULL DEFAULT '',
+  stock INTEGER NOT NULL DEFAULT 10,
   rating REAL DEFAULT 5.0,
   tag TEXT DEFAULT '', -- e.g. 'HOT', 'MỚI', 'TRẢ GÓP 0%'
   description TEXT NOT NULL DEFAULT ''
@@ -22,4 +24,13 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT 'customer',
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+DROP TABLE IF EXISTS policies;
+CREATE TABLE policies (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  slug TEXT UNIQUE NOT NULL,
+  category TEXT NOT NULL DEFAULT 'general',
+  content TEXT NOT NULL
 );
