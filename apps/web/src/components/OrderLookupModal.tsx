@@ -64,20 +64,6 @@ export default function OrderLookupModal({ open, onClose, onAskAI }: Props) {
     }
   }
 
-  // Thử nghiệm nhanh chỉ với Mã đơn
-  const handleTestOnlyCode = () => {
-    setOrderCode('MBX-888999')
-    setPhone('')
-    handleLookup('MBX-888999', '')
-  }
-
-  // Thử nghiệm nhanh chỉ với Số điện thoại
-  const handleTestOnlyPhone = () => {
-    setOrderCode('')
-    setPhone('0988888888')
-    handleLookup('', '0988888888')
-  }
-
   const handleClear = () => {
     setOrderCode('')
     setPhone('')
@@ -159,36 +145,18 @@ export default function OrderLookupModal({ open, onClose, onAskAI }: Props) {
 
           <div className="lookup-actions-row">
             <button className="lookup-submit-btn" type="submit" disabled={loading}>
-              {loading ? 'Đang tra cứu...' : '🔍 Tra cứu đơn'}
+              {loading ? 'Đang tra cứu...' : '🔍 Tra cứu đơn hàng'}
             </button>
-            <div className="lookup-quick-tests">
+            {(orderCode || phone || order) && (
               <button
-                className="lookup-sample-btn"
+                className="lookup-clear-btn"
                 type="button"
-                onClick={handleTestOnlyCode}
-                title="Chỉ tra cứu bằng Mã đơn hàng"
+                onClick={handleClear}
+                title="Xoá thông tin tra cứu"
               >
-                🏷️ Thử Mã đơn
+                ✕ Nhập lại
               </button>
-              <button
-                className="lookup-sample-btn"
-                type="button"
-                onClick={handleTestOnlyPhone}
-                title="Chỉ tra cứu bằng Số điện thoại"
-              >
-                📱 Thử SĐT
-              </button>
-              {(orderCode || phone || order) && (
-                <button
-                  className="lookup-clear-btn"
-                  type="button"
-                  onClick={handleClear}
-                  title="Xoá thông tin tra cứu"
-                >
-                  ✕ Xoá
-                </button>
-              )}
-            </div>
+            )}
           </div>
         </form>
 

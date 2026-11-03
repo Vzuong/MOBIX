@@ -884,14 +884,8 @@ export default function App() {
         </button>
       </nav>
 
-      {/* CHATBOT FLOATING BUBBLE (BONG BÓNG NHỎ GÓC DƯỚI BÊN PHẢI) */}
+      {/* CHATBOT FLOATING BUBBLE (NÚT ROBOT TRỢ LÝ AI GÓC PHẢI) */}
       <div className="chat-bubble-wrapper">
-        {!isChatOpen && (
-          <div className="chat-bubble-pill" onClick={() => setIsChatOpen(true)}>
-            <span className="pill-dot" />
-            <span>Hỏi BIX AI 🤖</span>
-          </div>
-        )}
         <button
           className="chat-bubble-fab"
           onClick={() => setIsChatOpen(!isChatOpen)}
