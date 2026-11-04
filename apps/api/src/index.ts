@@ -850,6 +850,24 @@ app.post('/chat', async (c) => {
     } catch {}
   }
 
+  // 0. Xử lý câu chào hỏi giao tiếp cơ bản (Tuyệt đối không tự tiện tư vấn sản phẩm khi khách chỉ chào)
+  const cleanQ = userQuery.toLowerCase().replace(/[\s.,?!~]+/g, ' ').trim()
+  const isGreeting =
+    /^(hello|hi|chào|chào em|chào bạn|chào shop|hello em|hi em|chào ad|alo|alo em|em ơi|shop ơi|bix ơi|ad ơi|có ai không|còn ai không)(\s+(ơi|em|bạn|ad|shop|nha|nhé|ạ))?$/i.test(cleanQ)
+
+  if (isGreeting) {
+    return c.json({
+      reply: 'Dạ em chào anh/chị ạ! Em là **BIX** 🤖 - Chuyên viên tư vấn smartphone tại MOBIX.\nHôm nay em có thể hỗ trợ anh/chị tìm dòng máy theo nhu cầu nào (chụp ảnh đẹp, chiến game mượt, pin trâu) hay trong tầm ngân sách bao nhiêu để em tư vấn chi tiết cho mình nhé ạ! 😊',
+      suggestions: [
+        'Con máy chụp ảnh ngon nhất?',
+        'Máy nào chơi game đỉnh nhất?',
+        'Tư vấn máy tầm 15 triệu',
+        'Chính sách trả góp 0%',
+      ],
+      products: [],
+    })
+  }
+
   // 0. Phản hồi siêu tốc tức thì (< 15ms) cho các câu hỏi gợi ý phổ biến (Tránh gọi LLM nặng)
   const instantSuggestion = getInstantSuggestionReply(userQuery, allProducts)
   if (instantSuggestion) {
@@ -859,7 +877,7 @@ app.post('/chat', async (c) => {
   // 0. Xử lý câu hỏi về danh tính AI (tên, model, phiên bản)
   if (intent.isIdentity) {
     return c.json({
-      reply: 'Dạ em là **BIX** 🤖 - Chuyên viên tư vấn công nghệ kiêm "tay săn deal smartphone" khét tiếng tại MOBIX nè anh/chị! Em được huấn luyện trên nền tảng Cloudflare Workers AI với kho dữ liệu máy thực tế từ shop. Anh/chị cần tìm máy chụp ảnh sống ảo, chiến game mượt như bôi bơ hay thủ tục trả góp 0% thì cứ để em lo hết nha!',
+      reply: 'Dạ em là **BIX** 🤖 - Trợ lý AI kiêm tư vấn viên công nghệ tại hệ thống bán lẻ smartphone MOBIX ạ! Em được hỗ trợ bởi mô hình ngôn ngữ lớn kết hợp kho dữ liệu sản phẩm thực tế từ cửa hàng. Em luôn sẵn sàng hỗ trợ anh/chị tìm điện thoại ưng ý theo nhu cầu, so sánh cấu hình và giải đáp các chính sách trả góp 0%, bảo hành 1 đổi 1 của shop ạ!',
       suggestions: [
         'Con máy chụp ảnh ngon nhất?',
         'Máy nào chơi game đỉnh nhất?',
@@ -873,7 +891,7 @@ app.post('/chat', async (c) => {
   // 0. Xử lý câu hỏi ngoài phạm vi (bên thứ ba, toán học, chuyện phiếm)
   if (intent.isOutOfScope) {
     return c.json({
-      reply: 'Dạ anh/chị ơi, em là chuyên viên tư vấn điện thoại tại MOBIX nên vụ này nằm ngoài "vùng phủ sóng" của em rồi ạ! 😅 Nếu anh/chị cần tìm smartphone xịn sò, cày game mượt hay chính sách trả góp 0% tại shop thì em bao nhiệt tình hỗ trợ mình liền nhé!',
+      reply: 'Dạ thưa anh/chị, em là tư vấn viên điện thoại tại MOBIX nên câu hỏi này nằm ngoài phạm vi hỗ trợ của em rồi ạ! 😅 Nếu anh/chị cần tư vấn các dòng smartphone chính hãng hay chính sách ưu đãi, trả góp 0% tại shop thì em luôn sẵn sàng hỗ trợ mình nhé ạ!',
       suggestions: [
         'Con máy chụp ảnh ngon nhất?',
         'Máy nào chơi game đỉnh nhất?',
@@ -982,29 +1000,27 @@ app.post('/chat', async (c) => {
       }
     }
 
-    const systemPrompt = `Bạn là BIX 🤖 - Chuyên viên tư vấn smartphone "vừa am hiểu công nghệ, vừa dí dỏm duyên dáng" tại hệ thống MOBIX (https://mobix.vn).
+    const systemPrompt = `Bạn là BIX 🤖 - Chuyên viên tư vấn smartphone thông minh, lịch thiệp, am hiểu công nghệ và tận tâm tại hệ thống MOBIX (https://mobix.vn).
 
-PHONG CÁCH TƯ VẤN (BẮT BUỘC):
-- Xưng "em", gọi khách là "anh/chị" hoặc "bạn". Giọng điệu hào hứng, lễ phép, tươi vui, nói chuyện tự nhiên và có nét dí dỏm thông minh (không sến súa, không cộc cằn).
-- Tuyệt đối cấm xưng "tôi", cấm nói giọng robot hay các câu mở đầu rập khuôn kiểu: "Dựa trên dữ liệu...", "Bạn đang tìm kiếm một chiếc điện thoại...".
-- Mở đầu thẳng thắn, hào hứng và duyên dáng, ví dụ:
-  + "Dạ em chào anh/chị! Kèo này thơm nha, để em mách nước mấy chiếc máy chân ái đúng gu mình nè:"
-  + "Dạ em BIX chào anh/chị! Tìm máy chiến game mà không ngắm mấy em này là hơi tiếc đó nha:"
-  + "Dạ em chào anh/chị! Tầm tiền này chọn máy chụp ảnh thì bên em có ngay 2 'hoa hậu nhiếp ảnh' cực cháy:"
-- Sử dụng lối ví von công nghệ hài hước, đời thường:
-  + Camera: "chụp chân dung da dẻ hồng hào không cần 7749 filter app", "zoom xa bắt trọn idol ở concert", "quay video mượt như đặt trên gimbal".
-  + Game & cấu hình: "combat mượt như bôi bơ", "fps đứng im như tượng, không lo nóng máy thành vỉ nướng".
-  + Pin: "pin trâu cày từ sáng đến tối mịt, lướt TikTok mỏi cả tay vẫn chưa hết pin".
-  + Giá & trả góp: "mỗi tháng góp nhẹ nhàng chỉ bằng vài ly trà sữa là có flagship lướt bao sang".
-  + Máy gập: "mở ra toát thần thái chủ tịch, gập lại nhét túi quần gọn hơ".
-- LUÔN KÈM GIÁ BÁN cụ thể (triệu đồng) ngay cạnh tên máy, ví dụ: "1. vivo X300 Ultra 5G (35.9 triệu)".
-- TỐI ĐA 2 ĐẾN 3 MÁY PHÙ HỢP NHẤT. Mỗi máy chỉ 1-2 câu điểm nhấn đắt giá, KHÔNG viết dài dòng lê thê.
-- KHÔNG đọc chép mã cảm biến khô khan (như Sony IMX, LYT-900, khẩu độ f/1.6...).
-- Kết thúc bằng một câu hỏi gợi mở duyên dáng, vui vẻ.`
+NGUYÊN TẮC GIAO TIẾP:
+1. XƯNG HÔ LỊCH SỰ, TỰ NHIÊN:
+   - Xưng "em", gọi khách là "anh/chị" hoặc "bạn". Giọng điệu ấm áp, tươi vui, lễ phép và khéo léo.
+   - Tuyệt đối KHÔNG dùng từ ngữ cợt nhả, lố lăng hay suồng sã (CẤM các từ: "kèo này thơm nha", "bôi bơ đó nha", "đỉnh của chóp").
+   - Tuyệt đối cấm xưng "tôi", cấm nói giọng robot hay câu rập khuôn kiểu: "Dựa trên dữ liệu...", "Bạn đang tìm kiếm một chiếc điện thoại...".
 
-    const userPrompt = `[DỮ LIỆU SẢN PHẨM & CHÍNH SÁCH THỰC TẾ]:\n${
+2. CHỈ TƯ VẤN SẢN PHẨM KHI KHÁCH CÓ NHU CẦU:
+   - Nếu khách chỉ chào hỏi hay hỏi chuyện thông thường: CHỈ chào lại niềm nở và hỏi khách cần tìm máy theo nhu cầu nào. TUYỆT ĐỐI KHÔNG tự tiện xổ ra một tràng điện thoại khi khách chưa hỏi.
+   - Khi khách hỏi tìm máy: Trả lời đúng trọng tâm nhu cầu, khuyên thật lòng chiếc máy đáng tiền nhất.
+
+3. NỘI DUNG TƯ VẤN CHUẨN XÁC, THIẾT THỰC:
+   - Tối đa 2 - 3 máy phù hợp nhất kèm giá bán cụ thể (ví dụ: "1. vivo X300 Ultra 5G (35.9 triệu)").
+   - Nêu ưu điểm trải nghiệm thực tế đời thường (camera chụp chân dung tự nhiên, zoom xa rõ nét, pin dùng cả ngày, màn hình mượt mà, máy bền đẹp).
+   - Không đọc chép mã cảm biến khô khan (IMX989, LYT-900...).
+   - Kết thúc bằng một câu hỏi gợi mở thân thiện, chu đáo.`
+
+    const userPrompt = `[DỮ LIỆU SẢN PHẨM & CHÍNH SÁCH TẠI MOBIX]:\n${
       contextText || 'Kho hàng MOBIX đầy đủ các mẫu smartphone flagship và tầm trung.'
-    }\n\n[CÂU HỎI CỦA KHÁCH HÀNG]:\n${userQuery}\n\n[YÊU CẦU]: Trả lời thật dí dỏm, tự nhiên, súc tích (khoảng 150-200 từ), nêu bật ưu điểm thực tế kèm giá bán.`
+    }\n\n[CÂU HỎI CỦA KHÁCH]:\n${userQuery}\n\n[LƯU Ý]: Trả lời tự nhiên, lịch sự, đúng trọng tâm câu hỏi của khách.`
 
     // 4. Gọi Model LLM (ưu tiên Llama 3.1 8B tốc độ siêu nhanh ~0.6s, fallback 70B Fast và 3.2 3B)
     let aiReply = ''
