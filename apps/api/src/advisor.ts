@@ -842,23 +842,23 @@ export function generateAdvice(
   // =========================================================================
   if (intent.wantsPhoto && intent.maxBudget && intent.maxBudget <= 21_000_000) {
     const x100 = allProducts.find((p) => p.name.includes('X100 Pro'))
+    const reno12 = allProducts.find((p) => p.name.includes('Reno12 Pro'))
     const mi17t = allProducts.find((p) => p.name.includes('17T Pro'))
     const ip15 = allProducts.find((p) => p.name.includes('iPhone 15 128GB'))
-    const reno12 = allProducts.find((p) => p.name.includes('Reno12 Pro'))
 
-    const photoPicks = [x100, mi17t, ip15, reno12].filter(Boolean) as Product[]
+    const photoPicks = [x100, reno12, mi17t, ip15].filter(Boolean) as Product[]
 
     reply =
-      `Dạ chào bạn! Trong **tầm giá dưới ${formatVnd(intent.maxBudget)}**, MOBIX đã lọc ra những chiếc máy có hệ thống camera chất lượng nhất trong kho dữ liệu:\n\n` +
-      `1. **${x100?.name} (${formatVnd(x100?.price || 18990000)}):** Ứng viên số 1 về nhiếp ảnh trong tầm giá với cụm camera hợp tác cùng ZEISS, tích hợp chip xử lý hình ảnh Vivo V3 chuyên biệt chụp đêm và chân dung sắc sảo.\n` +
-      `   *Điểm đánh đổi:* Là thế hệ trước của X300 Ultra, nhưng mức giá 18.99 triệu hiện tại cực kỳ kinh tế.\n\n` +
-      `2. **${mi17t?.name} (${formatVnd(mi17t?.price || 19790000)}):** Mẫu máy đời mới trang bị chip Dimensity 9500 mạnh mẽ, camera chụp ảnh chi tiết tốt kết hợp viên pin khủng 7000mAh sạc 100W.\n` +
-      `   *Điểm đánh đổi:* Máy tập trung nhiều vào hiệu năng, không có hệ màu Leica chuyên sâu như bản Ultra.\n\n` +
-      `3. **${ip15?.name} (${formatVnd(ip15?.price || 19490000)}):** Camera chính 48MP với màu ảnh chân thực, khả năng chụp chân dung tự động lưu thông tin chiều sâu và độ mượt mà từ iOS.\n` +
-      `   *Điểm đánh đổi:* Không có ống kính tele zoom xa riêng biệt và màn hình 60Hz.\n\n` +
-      `Nếu bạn ưu tiên chụp chân dung nghệ thuật xóa phông thì Vivo X100 Pro là đáng tiền nhất, còn nếu cần sự bền bỉ ổn định thì iPhone 15 rất phù hợp.`
+      `Dạ em chào anh/chị! Tầm tiền dưới ${formatVnd(intent.maxBudget)} mà muốn chụp ảnh sống ảo "đẹp mê ly" thì em mách nước 3 ứng viên hoa hậu này nha: ✨\n\n` +
+      `1. **${x100?.name} (${formatVnd(x100?.price || 18990000)}):** Trùm nhiếp ảnh phân khúc này luôn á! Có ống kính hợp tác cùng ZEISS và chip V3 chuyên xử lý ảnh, chụp chân dung da dẻ trắng hồng tự nhiên không cần qua 7749 filter, chụp đêm thì sáng rõ lung linh.\n` +
+      `   *Điểm cân nhắc:* Thiết kế cụm camera tròn to bản đặc trưng dòng máy nhiếp ảnh chuyên nghiệp.\n\n` +
+      `2. **${reno12?.name || mi17t?.name} (${formatVnd((reno12?.price || mi17t?.price) || 16000000)}):** Chuyên gia chân dung AI, làm đẹp tự nhiên xóa phông mượt mà, máy nhẹ tênh cầm rất thích tay mà giá cực kỳ hạt dẻ.\n` +
+      `   *Điểm cân nhắc:* Cảm biến tầm trung, chụp thiếu sáng gắt không sâu bằng dòng flagship đắt tiền hơn.\n\n` +
+      `3. **${ip15?.name} (${formatVnd(ip15?.price || 19490000)}):** Chụp chân thực, quay video TikTok/Reels thì nét căng không bao giờ bị bóp chất lượng khi up mạng xã hội.\n` +
+      `   *Điểm cân nhắc:* Màn hình tần số quét 60Hz tiêu chuẩn.\n\n` +
+      `Anh/chị thích gu màu ảnh chân dung nịnh mắt của vivo/OPPO hay màu chân thực của iPhone để em chọn màu máy hợp gu mình nhất nhé! 😊`
 
-    suggestions.push('Vivo X100 Pro chụp đêm', 'Xiaomi 17T Pro pin bao lâu?', 'iPhone 15 giá bao nhiêu?')
+    suggestions.push('Vivo X100 Pro chụp đêm nét không?', 'OPPO Reno12 Pro giá bao nhiêu?', 'Chính sách trả góp 0%')
     return {
       reply,
       suggestions,
@@ -931,16 +931,16 @@ export function generateAdvice(
     const battPicks = [r16t, oppoX9, mi17t].filter(Boolean) as Product[]
 
     reply =
-      `Dạ em chào anh/chị! Nếu anh/chị cần một chiếc máy pin siêu trâu dùng thoải mái 2-3 ngày không lo hết pin giữa chừng thì đây là những lựa chọn số 1 bên em:\n\n` +
-      `1. **${r16t?.name} (${formatVnd(r16t?.price || 9590000)}):** Đứng đầu phân khúc với viên pin Titan 8000mAh, cho thời gian onscreen thoải mái từ 2 - 3 ngày cho tác vụ cơ bản, sạc nhanh 45W.\n` +
-      `   *Điểm đánh đổi:* Máy sử dụng tấm nền màn hình LCD và chip Dimensity 6300 tầm trung vừa đủ dùng.\n\n` +
-      `2. **${oppoX9?.name} (${formatVnd(oppoX9?.price || 32490000)}):** Flagship cao cấp trang bị pin 7500mAh, sạc nhanh 80W cùng cụm camera Hasselblad đỉnh cao.\n` +
-      `   *Điểm đánh đổi:* Mức giá flagship cao cấp (32.49 triệu).\n\n` +
-      `3. **${mi17t?.name} (${formatVnd(mi17t?.price || 19790000)}):** Pin 7000mAh kết hợp sạc nhanh 100W và chip hiệu năng cao Dimensity 9500.\n` +
-      `   *Điểm đánh đổi:* Kích thước máy 6.83 inch khá lớn.\n\n` +
-      `Nếu bạn cần máy phụ pin bền giá rẻ thì realme 16T là chân ái; còn cần máy chính cấu hình cao thì Xiaomi 17T Pro rất đáng cân nhắc.`
+      `Dạ em chào anh/chị! Muốn kiếm máy pin "trâu bò" dùng tẹt ga 2 - 3 ngày lướt TikTok mỏi cả tay không lo sập nguồn thì xem ngay 3 siêu phẩm này bên em nha: 🔋\n\n` +
+      `1. **${r16t?.name} (${formatVnd(r16t?.price || 9590000)}):** "Vua lì đòn" với quả pin Titan 8000mAh khổng lồ, onscreen 2 - 3 ngày thoải mái, sạc nhanh 45W mà giá chưa tới 10 củ!\n` +
+      `   *Điểm cân nhắc:* Màn hình LCD và chip Dimensity 6300 đủ dùng tác vụ hàng ngày.\n\n` +
+      `2. **${mi17t?.name} (${formatVnd(mi17t?.price || 19790000)}):** Pin khủng 7000mAh kèm sạc siêu tốc 100W (cắm nửa tiếng là đầy nhóc), chip Dimensity 9500 siêu mạnh mẽ.\n` +
+      `   *Điểm cân nhắc:* Màn hình 6.83 inch khá to bản đầm tay.\n\n` +
+      `3. **${oppoX9?.name} (${formatVnd(oppoX9?.price || 32490000)}):** Flagship cao cấp pin 7500mAh, sạc nhanh 80W, camera Hasselblad chụp đẹp mê hồn.\n` +
+      `   *Điểm cân nhắc:* Thuộc phân khúc flagship cao cấp.\n\n` +
+      `Nếu anh/chị cần máy phụ pin bền giá mềm thì realme 16T là chân ái, còn làm máy chính cày việc thì Xiaomi 17T Pro bao ngon luôn ạ! Anh/chị ưng mẫu nào hơn nè?`
 
-    suggestions.push('realme 16T giá bao nhiêu?', 'Xiaomi 17T Pro pin bao lâu?', 'OPPO Find X9 Pro')
+    suggestions.push('realme 16T pin dùng được mấy ngày?', 'Xiaomi 17T Pro sạc bao lâu đầy?', 'Chính sách trả góp 0%')
     return {
       reply,
       suggestions,

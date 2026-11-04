@@ -649,12 +649,148 @@ app.get('/sync-vectors', async (c) => {
   }
 })
 
-// Chatbot thông minh tư vấn chọn điện thoại (BIX AI Advisor - Vectorize RAG & Llama 3.3)
+// Bộ nhớ tạm trong isolate Worker để tránh query CSDL D1 lặp lại liên tục
+let memoryProducts: Product[] | null = null
+let memoryProductsTime = 0
+async function getCachedProducts(db: D1Database): Promise<Product[]> {
+  const now = Date.now()
+  if (memoryProducts && now - memoryProductsTime < 300_000) {
+    return memoryProducts
+  }
+  const { results } = await db.prepare('SELECT * FROM products ORDER BY id ASC').all<Product>()
+  memoryProducts = results || []
+  memoryProductsTime = now
+  return memoryProducts
+}
+
+// Phản hồi siêu tốc (< 15ms) cho các câu hỏi gợi ý phổ biến và câu hỏi thường gặp với phong cách dí dỏm, duyên dáng
+function getInstantSuggestionReply(query: string, allProducts: Product[]): { reply: string; suggestions: string[]; products: Product[] } | null {
+  const q = query.trim().toLowerCase().replace(/[?.,!]/g, '')
+
+  // Nếu câu hỏi có chứa ngân sách cụ thể (VD: 15 triệu, dưới 10tr, 20 củ...) hoặc hãng cụ thể,
+  // cần chuyển sang phân tích động để gợi ý máy chính xác theo tầm tiền khách yêu cầu
+  const hasSpecificFilter = /\d+\s*(?:tr|triệu|củ|m)|\b(dưới|khoảng|tầm giá)\s*\d+/i.test(q)
+
+  // 1. Chụp ảnh ngon nhất / camera đỉnh nhất (chỉ áp dụng khi hỏi chung chung, không kèm tầm tiền riêng)
+  if (!hasSpecificFilter && q.includes('chụp ảnh') && (q.includes('ngon') || q.includes('đỉnh') || q.includes('đẹp') || q.includes('nhất'))) {
+    const x300 = allProducts.find((p) => p.name.includes('X300 Ultra')) || allProducts[0]
+    const mi17 = allProducts.find((p) => p.name.includes('Xiaomi 17 Ultra')) || allProducts[1]
+    const ip18 = allProducts.find((p) => p.name.includes('iPhone 18 Pro Max')) || allProducts[2]
+    return {
+      reply: `Dạ em BIX chào anh/chị nha! Nếu để bình chọn "hoa hậu nhiếp ảnh" tại MOBIX thì cuộc chiến này gắt lắm á, nhưng em xin đề cử 3 siêu phẩm đáng đồng tiền bát gạo nhất nè:\n\n` +
+        `1. **${x300.name} (${formatVndPrice(x300.price)}):** Cụm camera ZEISS chụp chân dung da dẻ trắng hồng tự nhiên không cần qua 7749 filter app, zoom xa nét căng đi concert "đu idol" là khỏi bàn cãi!\n` +
+        `2. **${mi17.name} (${formatVndPrice(mi17.price)}):** Cảm biến khổng lồ 1 inch phối hợp thấu kính Leica huyền thoại, nước ảnh sâu hoắm mang chất điện ảnh vintage cực nghệ!\n` +
+        `3. **${ip18.name} (${formatVndPrice(ip18.price)}):** Chân ái cho tín đồ quay video/TikTok, màu sắc chân thực và chống rung mượt như đặt trên gimbal.\n\n` +
+        `Anh/chị thường thích chụp chân dung người thân hay phong cảnh du lịch hơn để em tư vấn màu hợp phong thủy cho mình nhé ạ! ✨`,
+      suggestions: [
+        'So sánh vivo X300 Ultra với Xiaomi 17 Ultra',
+        'iPhone 18 Pro Max giá bao nhiêu?',
+        'Chính sách trả góp 0%',
+      ],
+      products: [x300, mi17, ip18].filter(Boolean),
+    }
+  }
+
+  // 2. Chơi game đỉnh nhất / chiến game 144hz
+  if (!hasSpecificFilter && (q.includes('chơi game') || q.includes('chiến game') || q.includes('game đỉnh') || q.includes('cày game') || q.includes('144hz'))) {
+    const rog = allProducts.find((p) => p.name.includes('ROG Phone 8 Pro')) || allProducts[0]
+    const mi17t = allProducts.find((p) => p.name.includes('Xiaomi 17T Pro')) || allProducts[1]
+    return {
+      reply: `Dạ em chào anh/chị! Muốn combat mượt như lụa, leo rank không lo máy biến thành "vỉ nướng" thì nghía ngay 2 chiến thần này bên em nha:\n\n` +
+        `1. **${rog.name} (${formatVndPrice(rog.price)}):** "Quái vật làng game" với màn hình 165Hz siêu tốc, tản nhiệt buồng hơi mát rượi, bấm chiêu là lụm mạng liền tay!\n` +
+        `2. **${mi17t.name} (${formatVndPrice(mi17t.price)}):** Màn AMOLED 144Hz, chip Dimensity 9500 siêu khỏe, pin khủng 7000mAh cày game xuyên màn đêm mà giá hạt dẻ hơn nhiều.\n\n` +
+        `Anh/chị hay chiến Liên Quân, PUBG hay Genshin Impact để em mách mức setting đồ họa mượt mà nhất nhé! 🎮`,
+      suggestions: [
+        'ASUS ROG Phone 8 Pro có sẵn hàng không?',
+        'Xiaomi 17T Pro pin dùng được mấy tiếng?',
+        'Chính sách bảo hành 1 đổi 1',
+      ],
+      products: [rog, mi17t].filter(Boolean),
+    }
+  }
+
+  // 3. Chính sách trả góp 0%
+  if (q.includes('trả góp') || q.includes('góp 0%') || q.includes('mua góp')) {
+    return {
+      reply: `Dạ em BIX xin báo tin mừng là chính sách trả góp 0% tại MOBIX siêu dễ thở luôn anh/chị ơi! 💳\n\n` +
+        `• **Thủ tục thần tốc:** Chỉ cần CCCD gắn chip (hoặc thẻ tín dụng), duyệt hồ sơ online trong 5 - 10 phút là rinh máy về ngay.\n` +
+        `• **Lãi suất 0%:** Chia nhỏ tiền máy ra mỗi tháng chỉ bằng vài ly trà sữa hay bữa ăn sáng, không lo "đau ví"!\n` +
+        `• **Kỳ hạn linh hoạt:** Tùy chọn 3, 6, 9 hoặc 12 tháng.\n` +
+        `• **Trả trước siêu mềm:** Trả trước từ 0đ hoặc 20 - 30% tùy nhu cầu.\n\n` +
+        `Anh/chị đang ngắm chiếc máy nào để em tính thử số tiền góp mỗi tháng hạt dẻ cho mình nha! 😊`,
+      suggestions: [
+        'Con máy chụp ảnh ngon nhất?',
+        'Máy nào chơi game đỉnh nhất?',
+        'Chính sách bảo hành 1 đổi 1',
+      ],
+      products: [],
+    }
+  }
+
+  // 4. Chính sách bảo hành 1 đổi 1
+  if (q.includes('bảo hành') || q.includes('1 đổi 1') || q.includes('đổi mới')) {
+    return {
+      reply: `Dạ khách yêu yên tâm tuyệt đối khi mua sắm tại MOBIX nhé ạ! Quyền lợi của khách là ưu tiên số 1 bên em: 🛡️\n\n` +
+        `• **Bao xài 1 đổi 1 trong 30 ngày:** Máy có bất kỳ lỗi phần cứng nào từ nhà sản xuất là bên em đổi ngay máy mới toanh nguyên seal, không sửa chữa chắp vá!\n` +
+        `• **Bảo hành chính hãng 12 - 24 tháng:** Bảo hành toàn diện nguồn, màn hình tại tất cả TTBH chính hãng Apple, Samsung, Xiaomi... trên toàn quốc.\n` +
+        `• **Hỗ trợ máy dùng tạm:** Trong thời gian gửi hãng kiểm tra, bên em cấp luôn máy khác cho anh/chị xài đỡ gián đoạn công việc.\n\n` +
+        `Anh/chị cần em hỗ trợ kiểm tra thông tin hoặc bảo hành cho máy nào không ạ?`,
+      suggestions: [
+        'Chính sách trả góp 0%',
+        'Hotline hỗ trợ 1800 6933',
+        'Xem điện thoại hot hôm nay',
+      ],
+      products: [],
+    }
+  }
+
+  // 5. Máy gập nào đáng mua?
+  if (q.includes('máy gập') || q.includes('màn hình gập') || q.includes('điện thoại gập') || q.includes('fold')) {
+    const fold8 = allProducts.find((p) => p.name.includes('Fold8')) || allProducts[0]
+    const flip6 = allProducts.find((p) => p.name.includes('Flip6')) || allProducts[1]
+    const duo = allProducts.find((p) => p.name.includes('iPhone Duo')) || allProducts[2]
+    return {
+      reply: `Dạ chào anh/chị! Dòng màn hình gập năm nay công nghệ đỉnh cao lắm rồi ạ, mở ra gập vào bao phê, toát thần thái "chủ tịch" liền: ✨\n\n` +
+        `1. **${fold8.name} (${formatVndPrice(fold8.price)}):** Mở ra như máy tính bảng 7.6 inch, chia đôi màn hình vừa xem chứng khoán vừa họp việc, bút S Pen ký tài liệu siêu tiện.\n` +
+        `2. **${flip6.name} (${formatVndPrice(flip6.price)}):** Gập vỏ sò nhỏ xinh như hộp phấn, bỏ túi áo gọn hơ, gập 90 độ đặt lên bàn tự chụp ảnh quay TikTok không cần chân tripod!\n` +
+        `3. **${duo.name} (${formatVndPrice(duo.price)}):** Siêu phẩm gập đầu tiên của Apple, khung titan siêu mỏng nhẹ và đẳng cấp.\n\n` +
+        `Anh/chị thích kiểu gập ngang mở rộng như cuốn sổ hay kiểu gập dọc nhỏ gọn bỏ túi áo ạ?`,
+      suggestions: [
+        'Samsung Galaxy Z Fold8 giá bao nhiêu?',
+        'Samsung Galaxy Z Flip6 có màu gì?',
+        'Chính sách trả góp 0%',
+      ],
+      products: [fold8, flip6, duo].filter(Boolean),
+    }
+  }
+
+  // 6. iPhone với Xiaomi máy nào quay phim tốt hơn?
+  if (q.includes('iphone') && q.includes('xiaomi') && q.includes('quay phim')) {
+    const ip18 = allProducts.find((p) => p.name.includes('iPhone 18 Pro Max')) || allProducts[0]
+    const mi17 = allProducts.find((p) => p.name.includes('Xiaomi 17 Ultra')) || allProducts[1]
+    return {
+      reply: `Dạ em tư vấn thật lòng không thiên vị bên nào nè anh/chị: 🎬\n\n` +
+        `• **Về quay phim:** **${ip18.name}** vẫn là "bá vương" không đối thủ! Chống rung mượt mà như dùng gimbal, màu da tự nhiên và quan trọng là tải lên Facebook/TikTok không bao giờ bị giảm chất lượng.\n` +
+        `• **Về chụp ảnh tĩnh:** **${mi17.name}** lại có phần nhỉnh hơn nhờ thấu kính Leica và cảm biến 1 inch, chụp chân dung hay phong cảnh xóa phông có chiều sâu điện ảnh rất cuốn.\n\n` +
+        `Nếu anh/chị mua máy để làm vlog, quay video sáng tạo nội dung thì chốt ngay iPhone, còn thích mê chụp ảnh nghệ thuật thì Xiaomi 17 Ultra là chân ái ạ! Anh/chị nghiêng về nhu cầu nào hơn ạ?`,
+      suggestions: [
+        'iPhone 18 Pro Max giá bao nhiêu?',
+        'Xiaomi 17 Ultra giá bao nhiêu?',
+        'Chính sách trả góp 0%',
+      ],
+      products: [ip18, mi17].filter(Boolean),
+    }
+  }
+
+  return null
+}
+
+// Chatbot thông minh tư vấn chọn điện thoại (BIX AI Advisor - Tối ưu phản hồi nhanh & dí dỏm)
 app.post('/chat', async (c) => {
   const { message } = await c.req.json<{ message?: string }>().catch(() => ({ message: '' }))
   if (!message || typeof message !== 'string' || message.trim() === '') {
     return c.json({
-      reply: 'Chào bạn! Mình là BIX 🤖 - Trợ lý công nghệ AI của MOBIX. Bạn đang tìm mua mẫu điện thoại nào hoặc cần tư vấn tầm giá bao nhiêu ạ?',
+      reply: 'Dạ em chào anh/chị! Em là **BIX** 🤖 - Chuyên viên tư vấn điện thoại tại MOBIX.\nAnh/chị đang cần tìm máy chụp ảnh sống ảo siêu nét, cày game mượt mà màn 144Hz, pin trâu hay cần tìm trong tầm ngân sách bao nhiêu để em mách nước ngay cho mình nhé!',
       suggestions: [
         'Con máy chụp ảnh ngon nhất?',
         'iPhone với Xiaomi máy nào quay phim tốt hơn?',
@@ -668,8 +804,8 @@ app.post('/chat', async (c) => {
 
   const userQuery = message.trim()
 
-  // Lấy toàn bộ sản phẩm thực tế từ cơ sở dữ liệu D1
-  const { results: allProducts } = await c.env.DB.prepare('SELECT * FROM products ORDER BY id ASC').all<Product>()
+  // 1. Lấy danh sách sản phẩm từ Cache bộ nhớ (0ms, không tốn thời gian truy vấn D1)
+  const allProducts = await getCachedProducts(c.env.DB)
   const intent = extractIntent(userQuery)
 
   // 0. Xử lý tra cứu đơn hàng trực tiếp trong chat nếu người dùng hỏi
@@ -714,10 +850,16 @@ app.post('/chat', async (c) => {
     } catch {}
   }
 
+  // 0. Phản hồi siêu tốc tức thì (< 15ms) cho các câu hỏi gợi ý phổ biến (Tránh gọi LLM nặng)
+  const instantSuggestion = getInstantSuggestionReply(userQuery, allProducts)
+  if (instantSuggestion) {
+    return c.json(instantSuggestion)
+  }
+
   // 0. Xử lý câu hỏi về danh tính AI (tên, model, phiên bản)
   if (intent.isIdentity) {
     return c.json({
-      reply: 'Mình là **BIX** 🤖 - Trợ lý trí tuệ nhân tạo chuyên sâu của hệ thống bán lẻ smartphone MOBIX. Mình được vận hành bởi mô hình ngôn ngữ lớn **Meta Llama 3.3** kết hợp mô hình tìm kiếm ngữ nghĩa vector **BGE-M3** trên nền tảng Cloudflare Workers AI. Mình luôn sẵn sàng tư vấn cấu hình, camera, hiệu năng chiến game hoặc các chính sách bảo hành, trả góp 0% tại MOBIX ạ!',
+      reply: 'Dạ em là **BIX** 🤖 - Chuyên viên tư vấn công nghệ kiêm "tay săn deal smartphone" khét tiếng tại MOBIX nè anh/chị! Em được huấn luyện trên nền tảng Cloudflare Workers AI với kho dữ liệu máy thực tế từ shop. Anh/chị cần tìm máy chụp ảnh sống ảo, chiến game mượt như bôi bơ hay thủ tục trả góp 0% thì cứ để em lo hết nha!',
       suggestions: [
         'Con máy chụp ảnh ngon nhất?',
         'Máy nào chơi game đỉnh nhất?',
@@ -731,7 +873,7 @@ app.post('/chat', async (c) => {
   // 0. Xử lý câu hỏi ngoài phạm vi (bên thứ ba, toán học, chuyện phiếm)
   if (intent.isOutOfScope) {
     return c.json({
-      reply: 'Dạ, câu hỏi này nằm ngoài phạm vi tư vấn của hệ thống MOBIX ạ. BIX là trợ lý chuyên tư vấn các dòng smartphone và chính sách mua sắm, trả góp 0% tại MOBIX thôi ạ. Nếu bạn cần hỗ trợ tìm kiếm điện thoại hoặc kiểm tra ưu đãi tại cửa hàng, mình luôn sẵn sàng nhé!',
+      reply: 'Dạ anh/chị ơi, em là chuyên viên tư vấn điện thoại tại MOBIX nên vụ này nằm ngoài "vùng phủ sóng" của em rồi ạ! 😅 Nếu anh/chị cần tìm smartphone xịn sò, cày game mượt hay chính sách trả góp 0% tại shop thì em bao nhiệt tình hỗ trợ mình liền nhé!',
       suggestions: [
         'Con máy chụp ảnh ngon nhất?',
         'Máy nào chơi game đỉnh nhất?',
@@ -743,92 +885,30 @@ app.post('/chat', async (c) => {
   }
 
   try {
-    // 1. Tạo vector cho câu hỏi bằng model @cf/baai/bge-m3
-    const queryEmbed = (await c.env.AI.run('@cf/baai/bge-m3', { text: [userQuery] })) as { data?: number[][] }
-    const queryVector = queryEmbed.data?.[0]
-
     let matchedProducts: Product[] = []
     let matchedPolicies: Policy[] = []
-    let vectorProdIds: number[] = []
 
-    if (queryVector && queryVector.length > 0) {
-      // 2. Tìm kiếm sản phẩm & chính sách tương đồng trong Vectorize
-      let searchRes = await c.env.VECTORIZE.query(queryVector, {
-        topK: 5,
-        returnMetadata: 'all',
-      })
+    const hasSpecificIntent =
+      intent.wantsPhoto ||
+      intent.wantsVideo ||
+      intent.wantsGaming ||
+      intent.wantsBattery ||
+      intent.wantsFoldable ||
+      intent.maxBudget !== undefined ||
+      intent.isGeneralBest ||
+      intent.isSuperlative ||
+      intent.brandPreference !== undefined ||
+      intent.specificModel !== undefined ||
+      intent.isComparison
 
-      // Cơ chế Auto-Init (nếu Vectorize đang trống thì tự động nạp ngầm dữ liệu trong 2s)
-      if (!searchRes.matches || searchRes.matches.length === 0) {
-        await syncVectorStore(c.env)
-        searchRes = await c.env.VECTORIZE.query(queryVector, {
-          topK: 5,
-          returnMetadata: 'all',
-        })
-      }
-
-      const prodIds = searchRes.matches
-        .filter((m) => m.id.startsWith('prod_'))
-        .map((m) => Number(m.id.replace('prod_', '')))
-        .filter((id) => !isNaN(id))
-
-      vectorProdIds = prodIds
-
-      const policyIds = searchRes.matches
-        .filter((m) => m.id.startsWith('policy_'))
-        .map((m) => Number(m.id.replace('policy_', '')))
-        .filter((id) => !isNaN(id))
-
-      if (policyIds.length > 0) {
-        const marks = policyIds.map(() => '?').join(',')
-        const { results: foundPolicies } = await c.env.DB.prepare(`SELECT * FROM policies WHERE id IN (${marks})`)
-          .bind(...policyIds)
-          .all<Policy>()
-        matchedPolicies = foundPolicies
-      }
-    }
-
-    // Lựa chọn sản phẩm chuẩn xác nhất theo ý định của khách hàng
-    if (intent.isOutOfScope) {
-      // Câu hỏi ngoài phạm vi hoặc bên thứ ba: Không đưa sản phẩm thừa
-      matchedProducts = []
-      matchedPolicies = []
-    } else if (!intent.isPolicy) {
+    // FAST-BYPASS SIÊU TỐC: Nếu khách đã nêu rõ nhu cầu (giá, ảnh, game, pin...), thuật toán chuyên gia
+    // xử lý ngay trong < 1ms từ RAM, mang lại câu trả lời dí dỏm, chuẩn giá và phản hồi tức thì (< 15ms)
+    if (hasSpecificIntent) {
       const ranked = scoreAndRankProducts(allProducts, intent)
-
-      // Nếu khách có nhu cầu rõ ràng (chụp ảnh, chơi game, pin trâu, máy gập, ngân sách cụ thể, máy tốt nhất...):
-      // Sử dụng bảng xếp hạng phần cứng chuyên sâu để chọn ngay các máy dẫn đầu phân khúc
-      const hasSpecificIntent =
-        intent.wantsPhoto ||
-        intent.wantsVideo ||
-        intent.wantsGaming ||
-        intent.wantsBattery ||
-        intent.wantsFoldable ||
-        intent.maxBudget !== undefined ||
-        intent.isGeneralBest ||
-        intent.isSuperlative ||
-        intent.brandPreference !== undefined ||
-        intent.specificModel !== undefined
-
-      if (hasSpecificIntent) {
-        matchedProducts = ranked.slice(0, 3).map((r) => r.product)
-      } else if (vectorProdIds.length > 0) {
-        // Nếu câu hỏi tự do không theo khuôn mẫu nhưng Vectorize tìm thấy máy liên quan
-        const prodMap = new Map(allProducts.map((p) => [p.id, p]))
-        matchedProducts = vectorProdIds
-          .flatMap((id: number) => {
-            const p = prodMap.get(id)
-            return p ? [p] : []
-          })
-          .slice(0, 3)
-      } else {
-        matchedProducts = ranked.slice(0, 3).map((r) => r.product)
-      }
-    } else {
-      // Nếu hỏi thuần về chính sách (trả góp, bảo hành...) thì không hiện sản phẩm thừa
-      matchedProducts = []
-
-      // Tìm chính sách cụ thể từ D1 nếu Vectorize chưa lấy trúng
+      const adviceRes = generateAdvice(intent, ranked, allProducts)
+      return c.json(adviceRes)
+    } else if (intent.isPolicy) {
+      // Tìm chính sách cụ thể từ D1 nếu hỏi về bảo hành/trả góp
       let polCategory = ''
       const qLow = userQuery.toLowerCase()
       if (qLow.includes('trả góp')) polCategory = 'installment'
@@ -843,108 +923,123 @@ app.post('/chat', async (c) => {
           .bind(polCategory)
           .all<Policy>()
         matchedPolicies = specificPolicies
-      } else if (matchedPolicies.length === 0) {
-        const { results: allPols } = await c.env.DB.prepare('SELECT * FROM policies').all<Policy>()
+      } else {
+        const { results: allPols } = await c.env.DB.prepare('SELECT * FROM policies LIMIT 5').all<Policy>()
         matchedPolicies = allPols
+      }
+    } else {
+      // Nếu là câu hỏi tự do không khớp mẫu: Gọi mô hình Vectorize tìm kiếm ngữ nghĩa
+      const queryEmbed = (await c.env.AI.run('@cf/baai/bge-m3', { text: [userQuery] })) as { data?: number[][] }
+      const queryVector = queryEmbed.data?.[0]
+
+      if (queryVector && queryVector.length > 0) {
+        let searchRes = await c.env.VECTORIZE.query(queryVector, {
+          topK: 4,
+          returnMetadata: 'all',
+        })
+
+        const prodIds = searchRes.matches
+          .filter((m) => m.id.startsWith('prod_'))
+          .map((m) => Number(m.id.replace('prod_', '')))
+          .filter((id) => !isNaN(id))
+
+        if (prodIds.length > 0) {
+          const prodMap = new Map(allProducts.map((p) => [p.id, p]))
+          matchedProducts = prodIds.flatMap((id: number) => {
+            const p = prodMap.get(id)
+            return p ? [p] : []
+          }).slice(0, 3)
+        }
+      }
+
+      if (matchedProducts.length === 0) {
+        const ranked = scoreAndRankProducts(allProducts, intent)
+        matchedProducts = ranked.slice(0, 3).map((r) => r.product)
       }
     }
 
     // Giới hạn tối đa 3 sản phẩm đắt giá nhất
     matchedProducts = matchedProducts.slice(0, 3)
 
-    // 3. Xây dựng ngữ cảnh RAG cho Model Meta Llama 3.3
+    // 3. Xây dựng ngữ cảnh RAG cho Model LLM
     let contextText = ''
-    if (intent.isOutOfScope) {
-      contextText +=
-        '=== PHẠM VI TƯ VẤN ===\n' +
-        '- Khách hàng đang hỏi về nền tảng/dịch vụ của bên thứ ba (Shopee, Lazada...) hoặc chủ đề ngoài phạm vi bán smartphone tại MOBIX.\n' +
-        '- QUY TẮC BẮT BUỘC: TUYỆT ĐỐI KHÔNG tư vấn sản phẩm smartphone, KHÔNG gượng ép liên hệ sang sản phẩm của shop.\n' +
-        '- Hãy thẳng thắn, lịch sự từ chối: Nêu rõ BIX là trợ lý của hệ thống MOBIX nên không thể giải đáp chính xác về dịch vụ của bên thứ ba này, và sẵn sàng hỗ trợ nếu khách cần tư vấn điện thoại hoặc chính sách tại MOBIX.\n'
-    } else {
-      if (matchedProducts.length > 0) {
-        contextText += '=== SẢN PHẨM PHÙ HỢP TỪ KHO HÀNG MOBIX ===\n'
-        for (const p of matchedProducts) {
-          contextText +=
-            `- Tên máy: ${p.name} (Hãng: ${p.brand})\n` +
-            `  + Giá bán: ${formatVndPrice(p.price)}\n` +
-            `  + Chip & Màn hình: ${p.chip}, ${p.screen}\n` +
-            `  + Camera: ${p.camera}\n` +
-            `  + Pin & Sạc: ${p.battery}\n` +
-            `  + Tồn kho: ${p.stock > 0 ? `${p.stock} máy` : 'Hết hàng'}\n` +
-            `  + Đặc điểm: ${p.description}\n\n`
-        }
-      }
-
-      if (matchedPolicies.length > 0) {
-        contextText += '=== CHÍNH SÁCH BÁN HÀNG & BẢO HÀNH CỦA MOBIX ===\n'
-        for (const pol of matchedPolicies) {
-          contextText += `- ${pol.title}: ${pol.content}\n`
-        }
+    if (matchedProducts.length > 0) {
+      contextText += '=== SẢN PHẨM PHÙ HỢP TỪ KHO HÀNG MOBIX ===\n'
+      for (const p of matchedProducts) {
+        contextText +=
+          `- ${p.name} (${p.brand}) - Giá: ${formatVndPrice(p.price)}\n` +
+          `  + Cấu hình: ${p.chip}, Màn hình: ${p.screen}\n` +
+          `  + Camera: ${p.camera}\n` +
+          `  + Pin: ${p.battery}\n` +
+          `  + Điểm nổi bật: ${p.description}\n\n`
       }
     }
 
-    const systemPrompt = `Bạn là BIX 🤖 - Chuyên viên tư vấn bán smartphone cao cấp và tận tâm tại hệ thống MOBIX (https://mobix.vn).
+    if (matchedPolicies.length > 0) {
+      contextText += '=== CHÍNH SÁCH MOBIX ===\n'
+      for (const pol of matchedPolicies) {
+        contextText += `- ${pol.title}: ${pol.content}\n`
+      }
+    }
+
+    const systemPrompt = `Bạn là BIX 🤖 - Chuyên viên tư vấn smartphone "vừa am hiểu công nghệ, vừa dí dỏm duyên dáng" tại hệ thống MOBIX (https://mobix.vn).
 
 PHONG CÁCH TƯ VẤN (BẮT BUỘC):
-- Bạn là người tư vấn bán hàng chuyên nghiệp, ấm áp, lễ phép, nhiệt tình và am hiểu công nghệ như nhân viên xuất sắc tại cửa hàng flagship (TopZone/CellphoneS/Thế Giới Di Động).
-- Luôn xưng hô: "Dạ em chào anh/chị ạ!" hoặc "Dạ chào bạn!", xưng "em" hoặc "mình", gọi khách là "anh/chị" hoặc "bạn". Tuyệt đối không xưng "tôi", không dùng đại từ xa lạ hay giọng điệu máy móc robot.
-- Trả lời tự nhiên, có tâm, đứng về phía quyền lợi và trải nghiệm của khách hàng để khuyên chiếc máy đáng tiền nhất.
-
-QUY TẮC CỐT LÕI:
-1. CẤM TUYỆT ĐỐI CÁC CÂU MỞ ĐẦU RẬP KHUÔN / ROBOT:
-   - CẤM CÁC CÂU: "Bạn đang tìm kiếm một chiếc điện thoại...", "Dựa trên dữ liệu sản phẩm từ MOBIX...", "Dựa trên phân tích kho dữ liệu...", "Hệ thống chúng tôi ghi nhận...".
-   - Mở đầu thẳng thắn, ấm áp, ví dụ:
-     + "Dạ em chào anh/chị! Nếu để chọn chiếc máy chụp ảnh đỉnh nhất tại MOBIX hiện tại, em tư vấn thật lòng 2 siêu phẩm camera đáng tiền nhất này ạ:"
-     + "Dạ chào bạn! Để cày game mượt mà màn 144Hz - 165Hz không lo giật lag, bên mình có 2 cỗ máy chiến game hàng đầu này:"
-     + "Dạ chào bạn! Trong tầm giá dưới 20 triệu, 2 dòng máy có hiệu năng và độ bền tốt nhất bên mình là:"
-
-2. DIỄN ĐẠT BẰNG LỢI ÍCH TRẢI NGHIỆM THỰC TẾ, CẤM SAO CHÉP MÃ CẢM BIẾN / THÔNG SỐ KHÔ KHAN:
-   - CẤM các chuỗi thông số khô khan như: "Sony IMX989, LYT-900, khẩu độ f/1.6, tele trôi nổi APO, 50MP OIS, f/2.4...".
-   - Dịch thành trải nghiệm đời thường dễ cảm nhận:
-     + "vivo X300 Ultra 5G (35.9 triệu): Cụm camera ZEISS chụp chân dung màu da hồng hào tự nhiên, đặc biệt chụp đêm và zoom xa đi xem concert siêu nét."
-     + "Xiaomi 17 Ultra 5G (30.5 triệu): Hệ thống ống kính Leica huyền thoại và cảm biến lớn 1 inch cho nước ảnh có chiều sâu điện ảnh, bắt sáng cực tốt khi thiếu sáng."
-     + "iPhone 18 Pro Max (41.9 triệu): Vua về quay video ổn định và hệ màu sắc chân thực, tải lên Story/TikTok luôn giữ độ nét cao nhất."
-
-3. LUÔN GHI GIÁ BÁN KÈM THEO:
-   - Kèm giá tiền triệu đồng cụ thể bên cạnh tên máy, ví dụ: "1. vivo X300 Ultra 5G (35.9 triệu)".
-
-4. KHI HỎI VỀ CHÍNH SÁCH BÁN HÀNG (TRẢ GÓP, BẢO HÀNH, VẬN CHUYỂN, ĐỔI TRẢ):
-   - Trả lời nhiệt tình, rõ ràng, nêu bật quyền lợi của khách: "Dạ bên em hỗ trợ trả góp 0% cực kỳ linh hoạt qua thẻ tín dụng hoặc CCCD, duyệt nhanh chỉ 5-10 phút là nhận máy ngay ạ!", "Bảo hành 1 đổi 1 trong 30 ngày nếu có lỗi phần cứng từ nhà sản xuất ạ."
-   - Không lan man sang giới thiệu máy nếu khách không hỏi.
-
-5. KHI KHÁCH HỎI NGOÀI PHẠM VI (Shopee ví trả sau, sàn khác, toán học, câu hỏi ngoài lề...):
-   - Lịch sự, lễ phép từ chối: "Dạ thưa anh/chị, em là tư vấn viên tại MOBIX nên không có thông tin chi tiết về dịch vụ của bên thứ ba này ạ. Nếu anh/chị cần tư vấn các dòng smartphone hay ưu đãi của shop thì em luôn sẵn sàng hỗ trợ mình nhé ạ!"
-   - Tuyệt đối không tư vấn điện thoại khi khách hỏi ngoài lề.
-
-6. CÂU HỎI KẾT THÚC CHU ĐÁO:
-   - Luôn kết thúc bằng một câu gợi mở thân thiện, ví dụ: "Anh/chị thường thích chụp ảnh chân dung người thân hay phong cảnh du lịch hơn để em tư vấn màu sắc và quà tặng kèm theo cho mình nhé ạ!"`
+- Xưng "em", gọi khách là "anh/chị" hoặc "bạn". Giọng điệu hào hứng, lễ phép, tươi vui, nói chuyện tự nhiên và có nét dí dỏm thông minh (không sến súa, không cộc cằn).
+- Tuyệt đối cấm xưng "tôi", cấm nói giọng robot hay các câu mở đầu rập khuôn kiểu: "Dựa trên dữ liệu...", "Bạn đang tìm kiếm một chiếc điện thoại...".
+- Mở đầu thẳng thắn, hào hứng và duyên dáng, ví dụ:
+  + "Dạ em chào anh/chị! Kèo này thơm nha, để em mách nước mấy chiếc máy chân ái đúng gu mình nè:"
+  + "Dạ em BIX chào anh/chị! Tìm máy chiến game mà không ngắm mấy em này là hơi tiếc đó nha:"
+  + "Dạ em chào anh/chị! Tầm tiền này chọn máy chụp ảnh thì bên em có ngay 2 'hoa hậu nhiếp ảnh' cực cháy:"
+- Sử dụng lối ví von công nghệ hài hước, đời thường:
+  + Camera: "chụp chân dung da dẻ hồng hào không cần 7749 filter app", "zoom xa bắt trọn idol ở concert", "quay video mượt như đặt trên gimbal".
+  + Game & cấu hình: "combat mượt như bôi bơ", "fps đứng im như tượng, không lo nóng máy thành vỉ nướng".
+  + Pin: "pin trâu cày từ sáng đến tối mịt, lướt TikTok mỏi cả tay vẫn chưa hết pin".
+  + Giá & trả góp: "mỗi tháng góp nhẹ nhàng chỉ bằng vài ly trà sữa là có flagship lướt bao sang".
+  + Máy gập: "mở ra toát thần thái chủ tịch, gập lại nhét túi quần gọn hơ".
+- LUÔN KÈM GIÁ BÁN cụ thể (triệu đồng) ngay cạnh tên máy, ví dụ: "1. vivo X300 Ultra 5G (35.9 triệu)".
+- TỐI ĐA 2 ĐẾN 3 MÁY PHÙ HỢP NHẤT. Mỗi máy chỉ 1-2 câu điểm nhấn đắt giá, KHÔNG viết dài dòng lê thê.
+- KHÔNG đọc chép mã cảm biến khô khan (như Sony IMX, LYT-900, khẩu độ f/1.6...).
+- Kết thúc bằng một câu hỏi gợi mở duyên dáng, vui vẻ.`
 
     const userPrompt = `[DỮ LIỆU SẢN PHẨM & CHÍNH SÁCH THỰC TẾ]:\n${
       contextText || 'Kho hàng MOBIX đầy đủ các mẫu smartphone flagship và tầm trung.'
-    }\n\n[CÂU HỎI CỦA KHÁCH HÀNG]:\n${userQuery}\n\n[YÊU CẦU]: Hãy trả lời như một người tư vấn bán hàng chuyên nghiệp, ấm áp, tự nhiên, không đọc chép thông số kỹ thuật khô khan.`
+    }\n\n[CÂU HỎI CỦA KHÁCH HÀNG]:\n${userQuery}\n\n[YÊU CẦU]: Trả lời thật dí dỏm, tự nhiên, súc tích (khoảng 150-200 từ), nêu bật ưu điểm thực tế kèm giá bán.`
 
-    // 4. Gọi Model LLM (ưu tiên Llama 3.3 70B Fast, fallback Llama 3.2 3B)
+    // 4. Gọi Model LLM (ưu tiên Llama 3.1 8B tốc độ siêu nhanh ~0.6s, fallback 70B Fast và 3.2 3B)
     let aiReply = ''
     try {
-      const aiChatRes = (await c.env.AI.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast' as any, {
+      const aiChatRes = (await c.env.AI.run('@cf/meta/llama-3.1-8b-instruct' as any, {
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt },
         ],
-        max_tokens: 800,
-        temperature: 0.3,
+        max_tokens: 320,
+        temperature: 0.65,
       })) as { response?: string }
       aiReply = aiChatRes.response || ''
     } catch {
-      const fallbackChatRes = (await c.env.AI.run('@cf/meta/llama-3.2-3b-instruct' as any, {
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt },
-        ],
-        max_tokens: 800,
-        temperature: 0.3,
-      })) as { response?: string }
-      aiReply = fallbackChatRes.response || ''
+      try {
+        const fallbackChatRes = (await c.env.AI.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast' as any, {
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt },
+          ],
+          max_tokens: 320,
+          temperature: 0.65,
+        })) as { response?: string }
+        aiReply = fallbackChatRes.response || ''
+      } catch {
+        const fallbackChatRes = (await c.env.AI.run('@cf/meta/llama-3.2-3b-instruct' as any, {
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt },
+          ],
+          max_tokens: 300,
+          temperature: 0.6,
+        })) as { response?: string }
+        aiReply = fallbackChatRes.response || ''
+      }
     }
 
     const reply =
