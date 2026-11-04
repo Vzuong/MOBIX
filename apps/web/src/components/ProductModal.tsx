@@ -4,9 +4,10 @@ type Props = {
   product: Product | null
   onClose: () => void
   onAddToCart: (product: Product) => void
+  onAskAI?: (product: Product) => void
 }
 
-export default function ProductModal({ product, onClose, onAddToCart }: Props) {
+export default function ProductModal({ product, onClose, onAddToCart, onAskAI }: Props) {
   if (!product) return null
 
   const discountPercent =
@@ -51,6 +52,12 @@ export default function ProductModal({ product, onClose, onAddToCart }: Props) {
               <span className="spec-label">Màn hình</span>
               <span className="spec-value">{product.screen}</span>
             </div>
+            {product.camera && (
+              <div className="spec-row">
+                <span className="spec-label">Hệ thống Camera</span>
+                <span className="spec-value">{product.camera}</span>
+              </div>
+            )}
             <div className="spec-row">
               <span className="spec-label">Bộ vi xử lý (Chip)</span>
               <span className="spec-value">{product.chip}</span>
@@ -63,9 +70,17 @@ export default function ProductModal({ product, onClose, onAddToCart }: Props) {
               <span className="spec-label">Pin & Công nghệ sạc</span>
               <span className="spec-value">{product.battery}</span>
             </div>
+            {product.stock !== undefined && (
+              <div className="spec-row">
+                <span className="spec-label">Tình trạng kho</span>
+                <span className="spec-value" style={{ color: product.stock > 0 ? 'var(--accent-green)' : '#ef4444' }}>
+                  {product.stock > 0 ? `Còn hàng (${product.stock} máy sẵn có)` : 'Tạm hết hàng'}
+                </span>
+              </div>
+            )}
             <div className="spec-row">
               <span className="spec-label">Chính sách bảo hành</span>
-              <span className="spec-value" style={{ color: 'var(--accent-green)' }}>12 tháng chính hãng, 1 đổi 1 trong 30 ngày</span>
+              <span className="spec-value" style={{ color: 'var(--accent-green)' }}>12 - 24 tháng chính hãng, 1 đổi 1 trong 30 ngày</span>
             </div>
           </div>
         </div>
@@ -81,15 +96,30 @@ export default function ProductModal({ product, onClose, onAddToCart }: Props) {
             )}
           </div>
 
-          <button
-            className="modal-cta"
-            onClick={() => {
-              onAddToCart(product)
-              onClose()
-            }}
-          >
-            Thêm vào giỏ ngay 🛍️
-          </button>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            {onAskAI && (
+              <button
+                className="modal-ai-btn"
+                type="button"
+                onClick={() => {
+                  onAskAI(product)
+                  onClose()
+                }}
+                title="Mở BIX AI tư vấn chuyên sâu về chiếc máy này"
+              >
+                🤖 Hỏi AI
+              </button>
+            )}
+            <button
+              className="modal-cta"
+              onClick={() => {
+                onAddToCart(product)
+                onClose()
+              }}
+            >
+              Thêm giỏ ngay 🛍️
+            </button>
+          </div>
         </div>
       </div>
     </div>
