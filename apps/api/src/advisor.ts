@@ -22,7 +22,10 @@ export interface ExtractedIntent {
   // Special intents
   isComparison?: boolean
   isGeneralBest?: boolean
+  isSuperlative?: boolean
   isPolicy?: boolean
+  isOutOfScope?: boolean
+  isIdentity?: boolean
 
   // Brand preference
   brandPreference?: string
@@ -58,14 +61,13 @@ export function extractIntent(message: string): ExtractedIntent {
   const raw = message.trim()
   const lower = raw.toLowerCase()
 
-  // Chuẩn hoá một số từ viết tắt phổ biến
-  const normalized = lower
-    .replace(/\bip\b/g, 'iphone')
-    .replace(/\bss\b/g, 'samsung')
-    .replace(/\bmi\b/g, 'xiaomi')
-    .replace(/\bcủ\b/g, 'triệu')
-    .replace(/\btr\b/g, 'triệu')
-    .replace(/\bm\b/g, 'triệu')
+  // Chuẩn hoá một số từ viết tắt phổ biến an toàn (không phá vỡ từ tiếng Việt như "trả", "máy", "màn")
+  let normalized = lower
+    .replace(/(^|[\s,?!.])ip([\s,?!.]|$)/g, '$1iphone$2')
+    .replace(/(^|[\s,?!.])ss([\s,?!.]|$)/g, '$1samsung$2')
+    .replace(/(^|[\s,?!.])mi([\s,?!.]|$)/g, '$1xiaomi$2')
+    .replace(/(\d+)\s*(?:tr|triệu|củ|m)(?=[\s,?!.]|$)/g, '$1 triệu')
+    .replace(/(^|[\s,?!.])củ([\s,?!.]|$)/g, '$1triệu$2')
 
   const intent: ExtractedIntent = {
     raw,
@@ -289,32 +291,106 @@ export function extractIntent(message: string): ExtractedIntent {
     intent.isComparison = true
   }
 
-  // 10. Câu hỏi chung: "tốt nhất hiện tại", "đáng mua nhất", "máy nào ngon nhất"
-  if (
+  // 10. Câu hỏi cực cấp: "tốt nhất hiện tại", "đáng mua nhất", "máy nào ngon nhất", "đỉnh nhất", "đẹp nhất", "số 1"
+  const isSuperlative =
     normalized.includes('tốt nhất') ||
     normalized.includes('ngon nhất') ||
     normalized.includes('đáng mua nhất') ||
     normalized.includes('đỉnh nhất') ||
     normalized.includes('xịn nhất') ||
+    normalized.includes('đẹp nhất') ||
     normalized.includes('toàn diện nhất') ||
+    normalized.includes('số 1') ||
+    normalized.includes('quán quân') ||
+    normalized.includes('chất lượng nhất') ||
     normalized.includes('flagship nào')
-  ) {
+
+  if (isSuperlative) {
+    intent.isSuperlative = true
     // Nếu không có nhu cầu hẹp như camera, gaming, pin, fold thì đây là general best
     if (!intent.wantsPhoto && !intent.wantsVideo && !intent.wantsGaming && !intent.wantsBattery && !intent.wantsFoldable) {
       intent.isGeneralBest = true
     }
   }
 
-  // 11. Chính sách trả góp / bảo hành
+  // 11. Chính sách bán hàng, bảo hành, đổi trả, trả góp, vận chuyển
   if (
     normalized.includes('trả góp') ||
     normalized.includes('bảo hành') ||
     normalized.includes('khuyến mãi') ||
     normalized.includes('ưu đãi') ||
     normalized.includes('giao hàng') ||
-    normalized.includes('ship')
+    normalized.includes('ship') ||
+    normalized.includes('đổi trả') ||
+    normalized.includes('1 đổi 1') ||
+    normalized.includes('thu cũ') ||
+    normalized.includes('thanh toán') ||
+    normalized.includes('cod')
   ) {
     intent.isPolicy = true
+  }
+
+  // 12. Câu hỏi về danh tính AI (tên, model, phiên bản)
+  const isBotIdentity =
+    normalized.includes('model gì') ||
+    normalized.includes('mô hình gì') ||
+    normalized.includes('dùng model gì') ||
+    normalized.includes('mày là model gì') ||
+    normalized.includes('bạn là model gì') ||
+    normalized.includes('mày là ai') ||
+    normalized.includes('bạn là ai') ||
+    normalized.includes('mày là gì') ||
+    normalized.includes('bạn là con gì') ||
+    normalized.includes('bạn tên gì') ||
+    normalized.includes('ai tạo ra bạn') ||
+    normalized.includes('bix là ai') ||
+    normalized.includes('bix là gì') ||
+    normalized.includes('dùng ai gì') ||
+    normalized.includes('sử dụng model nào')
+
+  if (isBotIdentity) {
+    intent.isIdentity = true
+    intent.isOutOfScope = false
+    intent.isPolicy = false
+  }
+
+  // 13. Phát hiện câu hỏi ngoài phạm vi (bên thứ ba, dịch vụ khác, toán học, chủ đề không liên quan)
+  const isThirdPartyOrExternal =
+    normalized.includes('shopee') ||
+    normalized.includes('shoppe') ||
+    normalized.includes('lazada') ||
+    normalized.includes('tiki') ||
+    normalized.includes('tiktok shop') ||
+    normalized.includes('sendo') ||
+    normalized.includes('spaylater') ||
+    normalized.includes('ví trả sau') ||
+    normalized.includes('momo') ||
+    normalized.includes('zalopay')
+
+  const isMathOrTrivia =
+    normalized.includes('bằng mấy') ||
+    normalized.includes('1-1') ||
+    normalized.includes('1+1') ||
+    normalized.includes('cộng') ||
+    normalized.includes('trừ') ||
+    normalized.includes('nhân') ||
+    normalized.includes('chia') ||
+    normalized.includes('thời tiết') ||
+    normalized.includes('nấu ăn') ||
+    normalized.includes('cách làm bánh') ||
+    normalized.includes('viết thơ') ||
+    normalized.includes('viết code') ||
+    normalized.includes('lập trình') ||
+    normalized.includes('tổng thống') ||
+    normalized.includes('thủ tướng') ||
+    normalized.includes('chính trị') ||
+    normalized.includes('chiến tranh') ||
+    normalized.includes('bóng đá') ||
+    normalized.includes('xổ số')
+
+  if (!isBotIdentity && (isThirdPartyOrExternal || isMathOrTrivia)) {
+    intent.isOutOfScope = true
+    intent.isPolicy = false
   }
 
   // 12. Hãng ưa chuộng
@@ -388,41 +464,39 @@ export function scoreAndRankProducts(products: Product[], intent: ExtractedInten
     // --- A. Chụp ảnh ---
     if (intent.wantsPhoto) {
       if (nameLower.includes('17 ultra')) {
-        score += 150
-        reasons.push('Cảm biến chính 1 inch, hệ thống camera Leica và camera tele 200MP chuyên sâu')
+        score += 180
+        reasons.push('Cảm biến chính 1 inch LYT-900, hệ thống camera Leica Summilux và camera tele 200MP chuyên sâu')
         tradeOffs.push('Cụm camera lồi đáng kể và thân máy đầm tay')
       } else if (nameLower.includes('x300 ultra')) {
-        score += 140
-        reasons.push('Hệ thống camera ZEISS 200MP độ phân giải cao và màn hình 144Hz sắc nét')
+        score += 175
+        reasons.push('Hệ thống camera ZEISS 200MP chống rung Gimbal độ phân giải siêu cao')
         tradeOffs.push('Mức giá thuộc phân khúc cao cấp (35.99 triệu)')
+      } else if (nameLower.includes('s26 ultra') || nameLower.includes('s24 ultra')) {
+        score += 165
+        reasons.push('Camera 200MP đa năng, zoom mắt thần 100x và thuật toán xử lý ảnh thông minh')
+        tradeOffs.push('Thiết kế máy vuông vức và kích thước lớn')
       } else if (nameLower.includes('find x9 pro')) {
-        score += 130
+        score += 160
         reasons.push('Camera tele 200MP kết hợp tinh chỉnh màu sắc chân dung Hasselblad')
         tradeOffs.push('Thiết kế màn hình lớn 6.78 inch')
-      } else if (nameLower.includes('x100 pro')) {
-        score += 125
-        reasons.push('Camera ZEISS cùng chip xử lý hình ảnh Vivo V3 tối ưu chụp đêm, giá dưới 20 triệu')
-        tradeOffs.push('Là model thế hệ trước so với X300 Ultra')
-      } else if (nameLower.includes('14 ultra')) {
-        score += 120
-        reasons.push('Hệ thống 4 camera Leica cảm biến 1 inch với giá thấp hơn Xiaomi 17 Ultra')
-        tradeOffs.push('Thời lượng pin 5000mAh ở mức tiêu chuẩn, chưa lớn bằng dòng 17 Ultra')
-      } else if (nameLower.includes('s26 ultra') || nameLower.includes('s24 ultra')) {
-        score += 110
-        reasons.push('Camera 200MP đa năng, zoom mắt thần và thuật toán xử lý ảnh thông minh')
-        tradeOffs.push('Ảnh ban đêm có xu hướng xử lý thuật toán sáng rõ hơn tông màu thực tế')
-      } else if (nameLower.includes('pixel 9 pro xl')) {
-        score += 105
-        reasons.push('Nhiếp ảnh điện toán AI Google độc quyền, màu sắc chân thực')
-        tradeOffs.push('Tốc độ sạc 37W không quá nhanh so với các đối thủ Android')
-      } else if (nameLower.includes('reno12 pro')) {
-        score += 90
-        reasons.push('Chuyên gia chụp ảnh chân dung tích hợp tính năng AI Eraser thông minh')
-        tradeOffs.push('Hiệu năng chip Dimensity 7300-Energy ở mức tầm trung')
-      } else if (nameLower.includes('18 pro max') || nameLower.includes('18 pro') || nameLower.includes('16 pro max')) {
-        score += 85
+      } else if (nameLower.includes('18 pro max') || nameLower.includes('18 pro')) {
+        score += 155
         reasons.push('Camera Pro Fusion sắc nét, màu sắc tự nhiên và tương thích tốt mọi ứng dụng')
         tradeOffs.push('Thiên về quay video và tính chân thực hơn là các bộ lọc màu nghệ thuật chuyên sâu')
+      } else if (nameLower.includes('16 pro max')) {
+        score += 140
+        reasons.push('Camera zoom 5x, nút điều khiển camera chuyên nghiệp')
+      } else if (nameLower.includes('14 ultra')) {
+        score += 130
+        reasons.push('Hệ thống 4 camera Leica cảm biến 1 inch với giá thấp hơn Xiaomi 17 Ultra')
+      } else if (nameLower.includes('x100 pro')) {
+        score += intent.maxBudget && intent.maxBudget <= 21_000_000 ? 140 : 85
+        reasons.push('Camera ZEISS cùng chip xử lý hình ảnh Vivo V3 tối ưu chụp đêm, giá dưới 20 triệu')
+        tradeOffs.push('Là model thế hệ trước so với X300 Ultra')
+      } else if (nameLower.includes('reno12 pro')) {
+        score += intent.maxBudget && intent.maxBudget <= 17_000_000 ? 130 : 60
+        reasons.push('Chuyên gia chụp ảnh chân dung tích hợp tính năng AI Eraser thông minh')
+        tradeOffs.push('Hiệu năng chip Dimensity 7300-Energy ở mức tầm trung')
       } else if (descLower.includes('camera') || tagLower.includes('camera')) {
         score += 30
       }
@@ -592,6 +666,28 @@ export function scoreAndRankProducts(products: Product[], intent: ExtractedInten
       }
     }
 
+    // --- Câu hỏi siêu cấp / ngon nhất / tốt nhất / đỉnh nhất ---
+    if (intent.isSuperlative) {
+      if (intent.wantsGaming) {
+        // Gaming: Ưu tiên máy gaming chuyên dụng & chip đồ hoạ cao cấp
+        if (nameLower.includes('rog') || nameLower.includes('gt8') || nameLower.includes('17t pro')) {
+          score += 50
+        }
+      } else if (intent.wantsBattery) {
+        // Pin trâu: Ưu tiên máy pin khủng 7000 - 8000mAh
+        if (nameLower.includes('16t') || nameLower.includes('find x9') || nameLower.includes('gt8')) {
+          score += 50
+        }
+      } else {
+        // Chụp ảnh hoặc câu hỏi chung: Ưu tiên flagship đầu bảng
+        if (p.price >= 30_000_000) {
+          score += 40
+        } else if (p.price < 22_000_000) {
+          score -= 40
+        }
+      }
+    }
+
     return {
       product: p,
       score,
@@ -628,6 +724,17 @@ export function generateAdvice(
   let reply = ''
 
   // =========================================================================
+  // CASE 0: Câu hỏi ngoài phạm vi hoặc thuộc bên thứ ba
+  // =========================================================================
+  if (intent.isOutOfScope) {
+    return {
+      reply: 'Dạ, câu hỏi này nằm ngoài phạm vi thông tin của hệ thống MOBIX ạ. BIX là trợ lý chuyên tư vấn các dòng smartphone và chính sách mua sắm, bảo hành, trả góp 0% tại MOBIX thôi ạ. Nếu bạn cần hỗ trợ tìm mua điện thoại hoặc kiểm tra ưu đãi tại MOBIX, mình luôn sẵn sàng giải đáp nhé!',
+      suggestions: ['Con máy chụp ảnh ngon nhất?', 'Máy nào chơi game đỉnh nhất?', 'Chính sách trả góp 0%', 'Chính sách bảo hành 1 đổi 1'],
+      products: [],
+    }
+  }
+
+  // =========================================================================
   // CASE 1: Chính sách trả góp / bảo hành
   // =========================================================================
   if (intent.isPolicy) {
@@ -639,11 +746,11 @@ export function generateAdvice(
       `4. **Ưu đãi kèm theo**: Giảm thêm 500.000đ khi mua kèm phụ kiện sạc nhanh hoặc gói bảo hiểm rơi vỡ màn hình.\n\n` +
       `Bạn đang quan tâm dòng máy cụ thể nào để mình gửi bảng dự toán trả góp chi tiết ạ?`
 
-    suggestions.push('iPhone 18 Pro Max trả góp', 'Xiaomi 17 Ultra', 'realme GT8 Pro xách tay', 'Samsung Galaxy S26 Ultra')
+    suggestions.push('Thủ tục trả góp qua CCCD', 'Thẻ tín dụng hỗ trợ 0%', 'Chính sách bảo hành 1 đổi 1')
     return {
       reply,
       suggestions,
-      products: [allProducts[0], allProducts[6], allProducts[10]], // Gợi ý các máy tiêu biểu
+      products: [],
     }
   }
 
@@ -768,14 +875,14 @@ export function generateAdvice(
     const oppoX9 = allProducts.find((p) => p.name.includes('Find X9 Pro')) || allProducts[8]
 
     reply =
-      `Chào bạn! Nếu xét về **khả năng chụp ảnh hàng đầu hiện nay**, các máy trang bị cảm biến lớn và quang học chuyên sâu từ Leica, ZEISS và Hasselblad trong kho dữ liệu MOBIX đang dẫn đầu:\n\n` +
+      `Dạ em chào anh/chị! Nếu để chọn chiếc máy chụp ảnh xuất sắc nhất tại MOBIX hiện tại, em xin tư vấn thật lòng các siêu phẩm camera đỉnh nhất bên em:\n\n` +
       `1. **${mi17u.name} (${formatVnd(mi17u.price)}):** Sở hữu cảm biến chính 1 inch thu sáng vượt trội, hệ thống thấu kính quang học Leica và camera tele 200MP cho chất ảnh có chiều sâu và độ chi tiết cao.\n` +
       `   *Điểm đánh đổi:* Cụm camera lồi khá lớn và trọng lượng máy đầm tay.\n\n` +
       `2. **${x300.name} (${formatVnd(x300.price)}):** Ứng viên nhiếp ảnh cao cấp hợp tác cùng ZEISS với camera 200MP, lớp phủ chống lóa T* và màn hình QHD+ 144Hz hiển thị màu chuẩn xác.\n` +
       `   *Điểm đánh đổi:* Mức giá 35.99 triệu thuộc phân khúc cao cấp.\n\n` +
       `3. **${oppoX9.name} (${formatVnd(oppoX9.price)}):** Nổi bật với camera tele 200MP tối ưu riêng cho chụp chân dung Hasselblad, tái tạo tông màu da rất tự nhiên và pin lớn 7500mAh.\n` +
       `   *Điểm đánh đổi:* Thiết kế màn hình cong 6.78 inch cần dán cường lực chuyên dụng.\n\n` +
-      `Không có mẫu máy nào hoàn hảo tuyệt đối trong mọi điều kiện; nếu bạn có ngân sách cụ thể (ví dụ tầm 20 triệu hay trên 30 triệu), mình sẽ chọn mẫu tối ưu nhất cho bạn nhé!`
+      `Anh/chị thường thích chụp ảnh chân dung hay phong cảnh hơn, và dự kiến tầm ngân sách khoảng bao nhiêu để em tư vấn màu sắc và ưu đãi tốt nhất cho mình nhé ạ!`
 
     suggestions.push('Xiaomi 17 Ultra giá bao nhiêu?', 'vivo X300 Ultra ZEISS', 'Máy chụp ảnh dưới 20 triệu')
     return {
@@ -796,7 +903,7 @@ export function generateAdvice(
     const gamingBattPicks = [gt8, mi17t, rog].filter(Boolean) as Product[]
 
     reply =
-      `Chào bạn! Với nhu cầu **vừa pin trâu vừa cày game nhiều**, máy bắt buộc phải có dung lượng pin lớn từ 7000mAh trở lên kết hợp chip đồ họa đầu bảng để không bị tụt FPS khi chơi lâu:\n\n` +
+      `Dạ em chào anh/chị! Để vừa cày game mượt mà vừa có pin trâu dùng cả ngày không lo gián đoạn, đây là 3 cỗ máy chiến game hàng đầu bên em:\n\n` +
       `1. **${gt8?.name} (${formatVnd(gt8?.price || 18490000)}):** Lựa chọn số 1 với chip Snapdragon 8 Elite Gen 5, màn hình 2K 144Hz, pin Titan 7000mAh và sạc siêu tốc 120W.\n` +
       `   *Điểm đánh đổi:* Đây là bản xách tay, cần chú ý thông báo ứng dụng và chính sách cập nhật phần mềm.\n\n` +
       `2. **${mi17t?.name} (${formatVnd(mi17t?.price || 19790000)}):** Trang bị Dimensity 9500 thế hệ mới, màn hình AMOLED 144Hz và pin 7000mAh hỗ trợ sạc nhanh 100W, tản nhiệt mát mẻ.\n` +
@@ -824,7 +931,7 @@ export function generateAdvice(
     const battPicks = [r16t, oppoX9, mi17t].filter(Boolean) as Product[]
 
     reply =
-      `Chào bạn! Về nhu cầu **pin trâu dùng lâu ít phải sạc**, MOBIX xin gửi bạn các model sở hữu dung lượng pin ấn tượng nhất từ kho sản phẩm:\n\n` +
+      `Dạ em chào anh/chị! Nếu anh/chị cần một chiếc máy pin siêu trâu dùng thoải mái 2-3 ngày không lo hết pin giữa chừng thì đây là những lựa chọn số 1 bên em:\n\n` +
       `1. **${r16t?.name} (${formatVnd(r16t?.price || 9590000)}):** Đứng đầu phân khúc với viên pin Titan 8000mAh, cho thời gian onscreen thoải mái từ 2 - 3 ngày cho tác vụ cơ bản, sạc nhanh 45W.\n` +
       `   *Điểm đánh đổi:* Máy sử dụng tấm nền màn hình LCD và chip Dimensity 6300 tầm trung vừa đủ dùng.\n\n` +
       `2. **${oppoX9?.name} (${formatVnd(oppoX9?.price || 32490000)}):** Flagship cao cấp trang bị pin 7500mAh, sạc nhanh 80W cùng cụm camera Hasselblad đỉnh cao.\n` +
@@ -965,7 +1072,7 @@ export function generateAdvice(
     const fold8 = allProducts.find((p) => p.name.includes('Z Fold8')) || allProducts[5]
 
     reply =
-      `Chào bạn! Trong thế giới smartphone hiện nay, không có một mẫu máy duy nhất gọi là "tốt nhất cho tất cả mọi người", mà mỗi flagship đầu bảng lại dẫn đầu ở một lĩnh vực riêng biệt:\n\n` +
+      `Dạ em chào anh/chị! Nếu xét về những siêu phẩm đầu bảng tại MOBIX hiện tại, mỗi dòng máy lại dẫn đầu ở một thế mạnh riêng biệt để anh/chị lựa chọn theo đúng gu của mình:\n\n` +
       `1. **${mi17u.name} (${formatVnd(mi17u.price)}):** Đỉnh cao về **nhiếp ảnh tĩnh** với cảm biến kích thước lớn 1 inch, thấu kính Leica và camera tele 200MP.\n` +
       `   *Điểm đánh đổi:* Cụm camera to và máy đầm tay.\n\n` +
       `2. **${ip18pm.name} (${formatVnd(ip18pm.price)}):** Dẫn đầu về **quay video, hiệu năng A20 Pro và sự ổn định dài lâu** trong hệ sinh thái Apple.\n` +
@@ -973,7 +1080,7 @@ export function generateAdvice(
       `3. **${s26u.name} (${formatVnd(s26u.price)}):** Chiếc máy **toàn diện nhất** cho công việc với bút S Pen, màn hình QHD+ Dynamic AMOLED 2X và bộ công cụ Galaxy AI mạnh mẽ.\n` +
       `   *Điểm đánh đổi:* Thiết kế góc cạnh kích thước lớn.\n\n` +
       `4. **${fold8.name} (${formatVnd(fold8.price)}):** Đỉnh cao về **đa nhiệm màn hình gập** 7.6 inch phục vụ công việc và giải trí không gian lớn.\n\n` +
-      `Bạn đang ưu tiên tiêu chí nào nhất: chụp ảnh, quay video làm nội dung, chiến game hay màn hình gập, và mức ngân sách dự kiến khoảng bao nhiêu để mình tư vấn chi tiết hơn nhé!`
+      `Anh/chị đang ưu tiên tiêu chí nào nhất: chụp ảnh nghệ thuật, quay video làm nội dung, chiến game hay màn hình gập để em tư vấn màu sắc và ưu đãi tốt nhất cho mình nhé ạ!`
 
     suggestions.push('Xiaomi 17 Ultra Leica', 'iPhone 18 Pro Max', 'Samsung Galaxy S26 Ultra', 'Samsung Galaxy Z Fold8')
     return {
@@ -986,7 +1093,7 @@ export function generateAdvice(
   // =========================================================================
   // DEFAULT CASE: Phân tích theo điểm số ranking động
   // =========================================================================
-  let summaryCriteria = 'nhu cầu của bạn'
+  let summaryCriteria = 'nhu cầu của anh/chị'
   if (intent.brandPreference) summaryCriteria = `thương hiệu ${intent.brandPreference}`
   if (intent.maxBudget) summaryCriteria = `mức ngân sách khoảng ${formatVnd(intent.maxBudget)}`
 
@@ -1000,9 +1107,9 @@ export function generateAdvice(
   })
 
   reply =
-    `Chào bạn! Dựa trên phân tích kho dữ liệu sản phẩm tại MOBIX phù hợp với ${summaryCriteria}, mình đề xuất các lựa chọn nổi bật sau:\n\n` +
+    `Dạ em chào anh/chị! Để đáp ứng tốt nhất ${summaryCriteria}, em xin tư vấn thật lòng các mẫu máy nổi bật và đáng mua nhất bên em:\n\n` +
     dynamicItemsText +
-    `Bạn có muốn tìm hiểu sâu hơn về thông số nào của các máy trên, hoặc cần tư vấn phương án trả góp 0% không ạ?`
+    `Anh/chị đang ưng ý mẫu máy nào hơn, hoặc cần em hướng dẫn phương án trả góp 0% nhận máy ngay không ạ?`
 
   selectedCandidates.forEach((c) => {
     suggestions.push(`${c.product.name} giá bao nhiêu?`)

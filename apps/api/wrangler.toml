@@ -13,9 +13,17 @@ run_worker_first = ["/api/*"]
 #   npx wrangler kv namespace create CART -> điền id
 [[d1_databases]]
 binding = "DB"
-database_name = "store-db"
+database_name = "mobix"
 database_id = "ac7ad5f6-bcc3-4cbc-b5c3-ed3564a9eb29"
 
 [[kv_namespaces]]
 binding = "CART"
 id = "2a188f870d644bccb27c4d67992b13fb"
+
+[ai]
+binding = "AI"
+
+[[vectorize]]
+binding = "VECTORIZE"
+index_name = "mobix-index"
+

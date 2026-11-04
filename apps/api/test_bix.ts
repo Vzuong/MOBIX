@@ -14,7 +14,7 @@ function loadProductsFromSeed(): Product[] {
 
   const products: Product[] = []
   // Regex bóc tách các khối VALUES (...)
-  const blockRegex = /\(\s*'([^']+)',\s*'([^']+)',\s*(\d+),\s*(NULL|\d+),\s*'([^']+)',\s*'([^']+)',\s*'([^']+)',\s*'([^']+)',\s*'([^']+)',\s*([\d.]+),\s*'([^']*)',\s*'([^']*)'\s*\)/g
+  const blockRegex = /\(\s*'([^']+)',\s*'([^']+)',\s*(\d+),\s*(NULL|\d+),\s*'([^']+)',\s*'([^']+)',\s*'([^']+)',\s*'([^']+)',\s*'([^']+)',\s*'([^']+)',\s*(\d+),\s*([\d.]+),\s*'([^']*)',\s*'([^']*)'\s*\)/g
 
   let match: RegExpExecArray | null
   let id = 1
@@ -30,9 +30,11 @@ function loadProductsFromSeed(): Product[] {
       screen: match[7],
       ram_rom: match[8],
       battery: match[9],
-      rating: parseFloat(match[10]),
-      tag: match[11],
-      description: match[12],
+      camera: match[10],
+      stock: parseInt(match[11], 10),
+      rating: parseFloat(match[12]),
+      tag: match[13],
+      description: match[14],
     })
   }
 
